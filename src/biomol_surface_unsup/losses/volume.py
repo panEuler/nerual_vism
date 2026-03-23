@@ -1,8 +1,28 @@
+from __future__ import annotations
+
 import torch
 
-def smooth_heaviside(x: torch.Tensor, eps: float):
+
+def smooth_heaviside(x: torch.Tensor, eps: float) -> torch.Tensor:
     return 0.5 * (1.0 + (2.0 / torch.pi) * torch.atan(x / eps))
 
-def volume_loss(pred_sdf: torch.Tensor, target_volume_fraction: float = 0.5, eps: float = 0.1):
+
+def volume_loss(
+    pred_sdf: torch.Tensor,
+    mask: torch.Tensor | None = None,
+    target_volume_fraction: float = 0.5,
+    eps: float = 0.1,
+) -> torch.Tensor:
+    """Toy volume-fraction penalty on masked SDF samples.
+
+    Shapes:
+    - pred_sdf: [Q]
+    - mask: [Q] or None
+    """
+    if mask is not None:
+        if not torch.any(mask):
+            return pred_sdf.new_zeros(())
+        pred_sdf = pred_sdf[mask]  # [Qm]
+
     inside = smooth_heaviside(-pred_sdf, eps).mean()
     return (inside - target_volume_fraction) ** 2

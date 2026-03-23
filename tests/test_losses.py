@@ -29,7 +29,7 @@ def test_build_loss_fn_returns_weighted_losses() -> None:
         dtype=torch.float32,
         requires_grad=True,
     )
-    pred_sdf = (query_points.pow(2).sum(dim=-1) - 0.2).requires_grad_(True)
+    pred_sdf = query_points.pow(2).sum(dim=-1) - 0.2
     batch = {
         "coords": torch.tensor([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]], dtype=torch.float32),
         "radii": torch.tensor([1.2, 1.3], dtype=torch.float32),
@@ -51,10 +51,35 @@ def test_build_loss_fn_returns_weighted_losses() -> None:
     )
 
     losses = loss_fn(batch, {"sdf": pred_sdf})
-    assert {"area", "volume", "containment", "prior", "eikonal", "total"}.issubset(losses)
+    assert {"area", "volume", "containment", "weak_prior", "eikonal", "total"}.issubset(losses)
     assert losses["containment_count"].item() == 2.0
     assert losses["global_count"].item() == 1.0
     assert losses["surface_band_count"].item() == 1.0
+    assert losses["weak_prior_count"].item() == 1.0
+    assert losses["area_count"].item() == 1.0
+    assert losses["volume_count"].item() == 1.0
+    assert losses["eikonal_count"].item() == 2.0
     assert losses["containment"].ndim == 0
     assert losses["total"].ndim == 0
     assert float(losses["total"].detach().cpu()) >= 0.0
+
+
+def test_build_loss_fn_handles_empty_surface_band_masks() -> None:
+    query_points = torch.tensor([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]], dtype=torch.float32, requires_grad=True)
+    pred_sdf = query_points[:, 0] - 0.1
+    batch = {
+        "coords": torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float32),
+        "radii": torch.tensor([1.0], dtype=torch.float32),
+        "query_points": query_points,
+        "query_group": torch.tensor([0, 1], dtype=torch.long),
+        "containment_points": query_points[torch.tensor([1])],
+    }
+    loss_fn = build_loss_fn({"loss": {}})
+
+    losses = loss_fn(batch, {"sdf": pred_sdf})
+    assert losses["area"].item() == pytest.approx(0.0)
+    assert losses["weak_prior"].item() == pytest.approx(0.0)
+    assert losses["area_count"].item() == pytest.approx(0.0)
+    assert losses["weak_prior_count"].item() == pytest.approx(0.0)
+    assert losses["volume_count"].item() == pytest.approx(1.0)
+    assert losses["eikonal_count"].item() == pytest.approx(1.0)

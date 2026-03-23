@@ -22,6 +22,9 @@ def train_step(model, batch, loss_fn, optimizer, device):
     optimizer.zero_grad()
     losses["total"].backward()
     optimizer.step()
+
+    # Keep train_step focused on logging/aggregation. Loss scoping and sample selection stay
+    # inside the loss builder so the objective/query-group mapping remains explicit in one place.
     metrics = {k: float(v.detach().cpu()) for k, v in losses.items()}
     metrics.update({f"sampling_{k}": float(v) for k, v in batch.get("sampling_counts", {}).items()})
     return metrics

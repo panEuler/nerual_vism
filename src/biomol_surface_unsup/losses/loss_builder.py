@@ -2,48 +2,43 @@ from __future__ import annotations
 
 import torch
 
+from biomol_surface_unsup.datasets.sampling import (
+    QUERY_GROUP_CONTAINMENT,
+    QUERY_GROUP_GLOBAL,
+    QUERY_GROUP_SURFACE_BAND,
+)
 from biomol_surface_unsup.geometry.sdf_ops import atomic_union_field
 from biomol_surface_unsup.losses.area import area_loss
 from biomol_surface_unsup.losses.containment import containment_loss
+from biomol_surface_unsup.losses.eikonal import eikonal_loss
 from biomol_surface_unsup.losses.volume import volume_loss
 from biomol_surface_unsup.losses.weak_prior import weak_prior_loss
 
 
-def _eikonal_loss(pred_sdf: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
-    """Toy-but-real eikonal term computed from autograd.
+def _masked_count(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Return scalar sample count for a boolean mask.
 
-    Shapes:
-    - pred_sdf: [Q]
-    - query_points: [Q, 3]
-    - grads: [Q, 3]
+    Shape:
+    - mask: [Q]
     """
-    grads = torch.autograd.grad(
-        outputs=pred_sdf,
-        inputs=query_points,
-        grad_outputs=torch.ones_like(pred_sdf),
-        create_graph=True,
-        retain_graph=True,
-        only_inputs=True,
-    )[0]
-    return (grads.norm(dim=-1) - 1.0).pow(2).mean()
+    return mask.sum().to(dtype)
 
 
 def _containment_from_model(
-    model_out: dict[str, torch.Tensor],
-    query_group: torch.Tensor,
+    pred_sdf: torch.Tensor,
+    containment_mask: torch.Tensor,
     margin: float,
 ) -> torch.Tensor:
-    """Containment term evaluated on the explicit containment sampling group.
+    """Containment term evaluated only on the explicit containment group.
 
     Shapes:
-    - model_out["sdf"]: [Q]
-    - query_group: [Q]
+    - pred_sdf: [Q]
+    - containment_mask: [Q]
+    - pred_sdf[containment_mask]: [Qc]
     """
-    containment_mask = query_group == 1  # [Q]
     if not torch.any(containment_mask):
-        return model_out["sdf"].new_zeros(())
-    containment_sdf = model_out["sdf"][containment_mask]  # [Qc]
-    return containment_loss(containment_sdf, margin=margin)
+        return pred_sdf.new_zeros(())
+    return containment_loss(pred_sdf[containment_mask], margin=margin)
 
 
 def build_loss_fn(cfg: dict[str, object]):
@@ -65,22 +60,41 @@ def build_loss_fn(cfg: dict[str, object]):
         query_group = batch["query_group"]  # [Q]
         pred_sdf = model_out["sdf"]  # [Q]
 
+        # Explicit query-group scopes for each objective.
+        is_global = query_group == QUERY_GROUP_GLOBAL  # [Q]
+        is_containment = query_group == QUERY_GROUP_CONTAINMENT  # [Q]
+        is_surface_band = query_group == QUERY_GROUP_SURFACE_BAND  # [Q]
+        is_eikonal = is_global | is_surface_band  # [Q]
+        # Rationale: keep eikonal on broad-space + near-surface samples. This preserves
+        # stable gradient regularization without tying it to containment anchors whose main
+        # role is inside/outside supervision. TODO: revisit whether full-query eikonal is
+        # preferable once the non-toy objective is introduced.
+
         losses = {
-            "area": area_loss(pred_sdf, query_points, eps=delta_eps),
-            "volume": volume_loss(pred_sdf, target_volume_fraction=target_volume_fraction, eps=heaviside_eps),
-            "prior": weak_prior_loss(coords, radii, query_points, pred_sdf),
-            "eikonal": _eikonal_loss(pred_sdf, query_points),
-            "containment": _containment_from_model(model_out, query_group, margin=containment_margin),
+            "area": area_loss(pred_sdf, query_points, mask=is_surface_band, eps=delta_eps),
+            "volume": volume_loss(
+                pred_sdf,
+                mask=is_global,
+                target_volume_fraction=target_volume_fraction,
+                eps=heaviside_eps,
+            ),
+            "weak_prior": weak_prior_loss(coords, radii, query_points, pred_sdf, mask=is_surface_band),
+            "eikonal": eikonal_loss(pred_sdf, query_points, mask=is_eikonal),
+            "containment": _containment_from_model(pred_sdf, is_containment, margin=containment_margin),
         }
         losses["target_sdf"] = atomic_union_field(coords, radii, query_points).detach().mean()
-        losses["containment_count"] = (query_group == 1).sum().to(pred_sdf.dtype)
-        losses["global_count"] = (query_group == 0).sum().to(pred_sdf.dtype)
-        losses["surface_band_count"] = (query_group == 2).sum().to(pred_sdf.dtype)
+        losses["global_count"] = _masked_count(is_global, pred_sdf.dtype)
+        losses["containment_count"] = _masked_count(is_containment, pred_sdf.dtype)
+        losses["surface_band_count"] = _masked_count(is_surface_band, pred_sdf.dtype)
+        losses["area_count"] = _masked_count(is_surface_band, pred_sdf.dtype)
+        losses["weak_prior_count"] = _masked_count(is_surface_band, pred_sdf.dtype)
+        losses["volume_count"] = _masked_count(is_global, pred_sdf.dtype)
+        losses["eikonal_count"] = _masked_count(is_eikonal, pred_sdf.dtype)
         losses["total"] = (
             lambda_area * losses["area"]
             + lambda_volume * losses["volume"]
             + lambda_containment * losses["containment"]
-            + lambda_prior * losses["prior"]
+            + lambda_prior * losses["weak_prior"]
             + lambda_eikonal * losses["eikonal"]
         )
         return losses
