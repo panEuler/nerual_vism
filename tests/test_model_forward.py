@@ -22,3 +22,5 @@ def test_model_forward():
         sample["query_points"],
     )
     assert out["sdf"].shape == (32,)
+    assert out["features"].shape[0] == 32
+    assert out["mask"].shape[0] == 32

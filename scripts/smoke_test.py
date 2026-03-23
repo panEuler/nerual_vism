@@ -15,6 +15,7 @@ except Exception as exc:  # pragma: no cover - script path
     raise SystemExit(f"smoke_test requires torch: {exc}")
 
 from biomol_surface_unsup.datasets.molecule_dataset import MoleculeDataset
+from biomol_surface_unsup.losses.loss_builder import build_loss_fn
 from biomol_surface_unsup.models.surface_model import SurfaceModel
 
 
@@ -29,14 +30,30 @@ def main() -> int:
     assert sample["query_points"].shape == (16, 3)
 
     model = SurfaceModel(num_atom_types=16)
+    query_points = sample["query_points"].requires_grad_(True)
     output = model(
         sample["coords"],
         sample["atom_types"],
         sample["radii"],
-        sample["query_points"],
+        query_points,
     )
     assert "sdf" in output
     assert output["sdf"].shape == (16,)
+    assert output["features"].shape[0] == 16
+    assert output["mask"].shape[0] == 16
+
+    loss_fn = build_loss_fn({"loss": {}})
+    losses = loss_fn(
+        {
+            "coords": sample["coords"],
+            "atom_types": sample["atom_types"],
+            "radii": sample["radii"],
+            "query_points": query_points,
+        },
+        output,
+    )
+    assert "total" in losses
+    assert torch.isfinite(losses["total"])
     print("smoke test ok")
     return 0
 
