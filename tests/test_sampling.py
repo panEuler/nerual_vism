@@ -1,15 +1,43 @@
 from __future__ import annotations
 
-import unittest
-
-from biomol_surface_unsup.datasets.sampling import sample_points
+import pytest
 
 
-class SamplingTestCase(unittest.TestCase):
-    def test_sample_points_returns_requested_count(self) -> None:
-        points = sample_points(3)
-        self.assertEqual(len(points), 3)
+torch = pytest.importorskip("torch")
+
+from biomol_surface_unsup.datasets.sampling import (
+    QUERY_GROUP_CONTAINMENT,
+    QUERY_GROUP_GLOBAL,
+    QUERY_GROUP_SURFACE_BAND,
+    approximate_atomic_union_sdf,
+    sample_query_points,
+)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_sample_query_points_returns_hierarchical_groups() -> None:
+    torch.manual_seed(0)
+    coords = torch.tensor([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]], dtype=torch.float32)
+    radii = torch.tensor([1.2, 1.3], dtype=torch.float32)
+
+    sampling = sample_query_points(coords=coords, radii=radii, num_query_points=8, padding=2.0)
+
+    assert tuple(sampling["query_points"].shape) == (8, 3)
+    assert tuple(sampling["query_group"].shape) == (8,)
+    assert tuple(sampling["containment_points"].shape) == (2, 3)
+    assert sampling["sampling_counts"] == {"global": 4, "containment": 2, "surface_band": 2}
+    assert int((sampling["query_group"] == QUERY_GROUP_GLOBAL).sum()) == 4
+    assert int((sampling["query_group"] == QUERY_GROUP_CONTAINMENT).sum()) == 2
+    assert int((sampling["query_group"] == QUERY_GROUP_SURFACE_BAND).sum()) == 2
+
+
+def test_surface_band_points_are_close_to_toy_atomic_union_boundary() -> None:
+    torch.manual_seed(1)
+    coords = torch.tensor([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]], dtype=torch.float32)
+    radii = torch.tensor([1.2, 1.3], dtype=torch.float32)
+
+    sampling = sample_query_points(coords=coords, radii=radii, num_query_points=12, padding=2.0)
+    surface_points = sampling["query_points"][sampling["query_group"] == QUERY_GROUP_SURFACE_BAND]
+    band_sdf = approximate_atomic_union_sdf(coords, radii, surface_points)
+
+    assert surface_points.shape[0] == sampling["sampling_counts"]["surface_band"]
+    assert torch.all(band_sdf.abs() <= 0.5)

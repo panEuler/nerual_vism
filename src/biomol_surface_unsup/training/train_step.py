@@ -3,14 +3,25 @@ def train_step(model, batch, loss_fn, optimizer, device):
     coords = batch["coords"].to(device)
     atom_types = batch["atom_types"].to(device)
     radii = batch["radii"].to(device)
-    query_points = batch["query_points"].to(device).requires_grad_(True)
+    query_points = batch["query_points"].to(device).requires_grad_(True)  # [Q, 3]
+    query_group = batch["query_group"].to(device)  # [Q]
+    containment_points = batch["containment_points"].to(device)  # [C, 3]
 
     out = model(coords, atom_types, radii, query_points)
     losses = loss_fn(
-        {"coords": coords, "atom_types": atom_types, "radii": radii, "query_points": query_points},
+        {
+            "coords": coords,
+            "atom_types": atom_types,
+            "radii": radii,
+            "query_points": query_points,
+            "query_group": query_group,
+            "containment_points": containment_points,
+        },
         out,
     )
     optimizer.zero_grad()
     losses["total"].backward()
     optimizer.step()
-    return {k: float(v.detach().cpu()) for k, v in losses.items()}
+    metrics = {k: float(v.detach().cpu()) for k, v in losses.items()}
+    metrics.update({f"sampling_{k}": float(v) for k, v in batch.get("sampling_counts", {}).items()})
+    return metrics
