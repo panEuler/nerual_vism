@@ -12,6 +12,7 @@ from biomol_surface_unsup.datasets.sampling import (
 )
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.loss_builder import build_loss, build_loss_fn
+from biomol_surface_unsup.training.train_step import train_step
 from biomol_surface_unsup.utils.config import normalize_loss_config
 
 
@@ -38,6 +39,7 @@ def _build_batch(query_group: torch.Tensor) -> tuple[dict[str, torch.Tensor], to
     pred_sdf = query_points.pow(2).sum(dim=-1) - 0.2
     batch = {
         "coords": torch.tensor([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]], dtype=torch.float32),
+        "atom_types": torch.tensor([1, 6], dtype=torch.long),
         "radii": torch.tensor([1.2, 1.3], dtype=torch.float32),
         "query_points": query_points,
         "query_group": query_group,
@@ -160,3 +162,34 @@ def test_build_loss_fn_handles_empty_masks_from_configured_groups() -> None:
     assert losses["eikonal"].item() == pytest.approx(0.0)
     assert losses["eikonal_count"].item() == pytest.approx(0.0)
     assert losses["volume_count"].item() == pytest.approx(2.0)
+
+
+def test_train_step_runs_backward_and_optimizer_step_on_toy_batch() -> None:
+    class TinyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.tensor(0.25, dtype=torch.float32))
+            self.bias = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+
+        def forward(self, coords, atom_types, radii, query_points):
+            del coords, atom_types, radii
+            sdf = self.scale * query_points.pow(2).sum(dim=-1) + self.bias
+            return {"sdf": sdf}
+
+    batch, _ = _build_batch(
+        torch.tensor(
+            [QUERY_GROUP_GLOBAL, QUERY_GROUP_CONTAINMENT, QUERY_GROUP_SURFACE_BAND, QUERY_GROUP_GLOBAL],
+            dtype=torch.long,
+        )
+    )
+    loss_fn = build_loss_fn({"loss": {}})
+    model = TinyModel()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+
+    before = model.scale.detach().clone()
+    metrics = train_step(model, batch, loss_fn, optimizer, device="cpu")
+    after = model.scale.detach().clone()
+
+    assert "total" in metrics
+    assert metrics["total"] >= 0.0
+    assert not torch.allclose(before, after)

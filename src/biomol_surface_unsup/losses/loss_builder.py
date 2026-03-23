@@ -87,6 +87,11 @@ def build_loss_fn(cfg: dict[str, object]):
         query_group = batch["query_group"]  # [Q]
         pred_sdf = model_out["sdf"]  # [Q]
 
+        if pred_sdf.ndim != 1:
+            pred_sdf = pred_sdf.reshape(-1)
+        if not query_points.requires_grad:
+            query_points = query_points.requires_grad_(True)
+
         # Base query-group counts are logged independently of the objective so debug
         # output still shows how many samples came from each sampler bucket.
         base_masks = {

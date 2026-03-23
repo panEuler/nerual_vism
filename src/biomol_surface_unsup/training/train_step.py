@@ -8,6 +8,8 @@ def train_step(model, batch, loss_fn, optimizer, device):
     containment_points = batch["containment_points"].to(device)  # [C, 3]
 
     out = model(coords, atom_types, radii, query_points)
+    if "sdf" in out and out["sdf"].ndim != 1:
+        out["sdf"] = out["sdf"].reshape(-1)
     losses = loss_fn(
         {
             "coords": coords,

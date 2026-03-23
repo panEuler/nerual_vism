@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import torch
 
+from .area import _safe_query_grads
+
 
 def eikonal_loss(
     pred_sdf: torch.Tensor,
@@ -22,14 +24,7 @@ def eikonal_loss(
     if mask is not None and not torch.any(mask):
         return pred_sdf.new_zeros(())
 
-    grads = torch.autograd.grad(
-        outputs=pred_sdf,
-        inputs=query_points,
-        grad_outputs=torch.ones_like(pred_sdf),
-        create_graph=True,
-        retain_graph=True,
-        only_inputs=True,
-    )[0]
+    grads = _safe_query_grads(pred_sdf, query_points)
     penalty = (grads.norm(dim=-1) - 1.0).pow(2)  # [Q]
     if mask is not None:
         penalty = penalty[mask]  # [Qm]

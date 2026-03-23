@@ -4,6 +4,7 @@ import torch
 
 
 def smooth_heaviside(x: torch.Tensor, eps: float) -> torch.Tensor:
+    eps = max(float(eps), 1e-6)
     return 0.5 * (1.0 + (2.0 / torch.pi) * torch.atan(x / eps))
 
 
@@ -18,6 +19,10 @@ def volume_loss(
     Shapes:
     - pred_sdf: [Q]
     - mask: [Q] or None
+
+    Notes:
+    - This is a stable sampling-based placeholder for the toy path; it is not a
+      physically accurate volume integral.
     """
     if mask is not None:
         if not torch.any(mask):
@@ -25,4 +30,5 @@ def volume_loss(
         pred_sdf = pred_sdf[mask]  # [Qm]
 
     inside = smooth_heaviside(-pred_sdf, eps).mean()
-    return (inside - target_volume_fraction) ** 2
+    target = pred_sdf.new_tensor(float(target_volume_fraction))
+    return (inside - target).pow(2)

@@ -31,5 +31,7 @@ def weak_prior_loss(
         query_points = query_points[mask]  # [Qm, 3]
         pred_sdf = pred_sdf[mask]  # [Qm]
 
-    target = atomic_union_field(coords, radii, query_points)  # [Qm] or [Q]
+    target = atomic_union_field(coords, radii, query_points).detach()  # [Qm] or [Q]
+    # Stable placeholder: keep the geometric proxy fixed so this term regularizes the
+    # predicted field without backpropagating through the proxy construction itself.
     return (pred_sdf - target).abs().mean()

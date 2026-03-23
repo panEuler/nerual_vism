@@ -3,6 +3,7 @@ from .volume import volume_loss
 from .weak_prior import weak_prior_loss
 from .eikonal import eikonal_loss
 
+
 def vism_lite_loss(
     coords,
     radii,
@@ -13,6 +14,12 @@ def vism_lite_loss(
     lambda_prior=0.5,
     lambda_eikonal=0.1,
 ):
+    """Legacy toy VISM-lite wrapper kept for compatibility.
+
+    Notes:
+    - `query_points` should require grad if area/eikonal are enabled.
+    - The prior/volume terms are intentionally simple stable surrogates in the toy path.
+    """
     losses = {}
     losses["area"] = area_loss(pred_sdf, query_points)
     losses["volume"] = volume_loss(pred_sdf)
