@@ -24,6 +24,8 @@ class MoleculeDataset(Dataset):
     - atom_types: [N]
     - radii: [N]
     - query_points: [Q, 3]
+    - query_group: [Q]
+    - containment_points: [C, 3]
     """
 
     def __init__(
@@ -56,24 +58,21 @@ class MoleculeDataset(Dataset):
         atom_types_data = [0, 1, 2, 3][: self.num_atoms]
         radii_data = [1.2, 1.5, 1.4, 1.3][: self.num_atoms]
 
-        if torch is not None:
-            coords = torch.tensor(coords_data, dtype=torch.float32)  # [N, 3]
-            atom_types = torch.tensor(atom_types_data, dtype=torch.long)  # [N]
-            radii = torch.tensor(radii_data, dtype=torch.float32)  # [N]
-            query_points = sample_query_points(
-                coords=coords,
-                num_query_points=self.num_query_points,
-                padding=self.bbox_padding,
-            )  # [Q, 3]
-        else:
-            coords = coords_data
-            atom_types = atom_types_data
-            radii = radii_data
-            query_points = sample_query_points(
-                coords=coords,
-                num_query_points=self.num_query_points,
-                padding=self.bbox_padding,
-            )
+        if torch is None:
+            raise RuntimeError("MoleculeDataset requires torch in the current toy training path")
+
+        coords = torch.tensor(coords_data, dtype=torch.float32)  # [N, 3]
+        atom_types = torch.tensor(atom_types_data, dtype=torch.long)  # [N]
+        radii = torch.tensor(radii_data, dtype=torch.float32)  # [N]
+        sampling = sample_query_points(
+            coords=coords,
+            num_query_points=self.num_query_points,
+            padding=self.bbox_padding,
+            radii=radii,
+        )
+        query_points = sampling["query_points"]  # [Q, 3]
+        query_group = sampling["query_group"]  # [Q]
+        containment_points = sampling["containment_points"]  # [C, 3]
 
         return {
             "id": f"{self.split}-{idx}",
@@ -81,4 +80,7 @@ class MoleculeDataset(Dataset):
             "atom_types": atom_types,
             "radii": radii,
             "query_points": query_points,
+            "query_group": query_group,
+            "containment_points": containment_points,
+            "sampling_counts": sampling["sampling_counts"],
         }

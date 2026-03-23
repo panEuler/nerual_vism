@@ -28,19 +28,22 @@ def _eikonal_loss(pred_sdf: torch.Tensor, query_points: torch.Tensor) -> torch.T
     return (grads.norm(dim=-1) - 1.0).pow(2).mean()
 
 
-def _toy_containment_loss(coords: torch.Tensor, radii: torch.Tensor, pred_sdf: torch.Tensor) -> torch.Tensor:
-    """Placeholder containment proxy for the toy loop.
+def _containment_from_model(
+    model_out: dict[str, torch.Tensor],
+    query_group: torch.Tensor,
+    margin: float,
+) -> torch.Tensor:
+    """Containment term evaluated on the explicit containment sampling group.
 
     Shapes:
-    - coords: [N, 3]
-    - radii: [N]
-    - pred_sdf: [Q]
-
-    TODO: replace this proxy with a real containment objective that evaluates the
-    predicted field at atom centers or other guaranteed-inside anchor points.
+    - model_out["sdf"]: [Q]
+    - query_group: [Q]
     """
-    approx_center_sdf = pred_sdf.mean().expand_as(radii)
-    return containment_loss(approx_center_sdf)
+    containment_mask = query_group == 1  # [Q]
+    if not torch.any(containment_mask):
+        return model_out["sdf"].new_zeros(())
+    containment_sdf = model_out["sdf"][containment_mask]  # [Qc]
+    return containment_loss(containment_sdf, margin=margin)
 
 
 def build_loss_fn(cfg: dict[str, object]):
@@ -53,11 +56,13 @@ def build_loss_fn(cfg: dict[str, object]):
     target_volume_fraction = float(loss_cfg.get("target_volume_fraction", 0.5))
     delta_eps = float(loss_cfg.get("delta_eps", 0.1))
     heaviside_eps = float(loss_cfg.get("heaviside_eps", 0.1))
+    containment_margin = float(loss_cfg.get("containment_margin", 0.5))
 
     def loss_fn(batch: dict[str, torch.Tensor], model_out: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         coords = batch["coords"]  # [N, 3]
         radii = batch["radii"]  # [N]
         query_points = batch["query_points"]  # [Q, 3]
+        query_group = batch["query_group"]  # [Q]
         pred_sdf = model_out["sdf"]  # [Q]
 
         losses = {
@@ -65,9 +70,12 @@ def build_loss_fn(cfg: dict[str, object]):
             "volume": volume_loss(pred_sdf, target_volume_fraction=target_volume_fraction, eps=heaviside_eps),
             "prior": weak_prior_loss(coords, radii, query_points, pred_sdf),
             "eikonal": _eikonal_loss(pred_sdf, query_points),
-            "containment": _toy_containment_loss(coords, radii, pred_sdf),
+            "containment": _containment_from_model(model_out, query_group, margin=containment_margin),
         }
         losses["target_sdf"] = atomic_union_field(coords, radii, query_points).detach().mean()
+        losses["containment_count"] = (query_group == 1).sum().to(pred_sdf.dtype)
+        losses["global_count"] = (query_group == 0).sum().to(pred_sdf.dtype)
+        losses["surface_band_count"] = (query_group == 2).sum().to(pred_sdf.dtype)
         losses["total"] = (
             lambda_area * losses["area"]
             + lambda_volume * losses["volume"]
