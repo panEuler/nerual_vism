@@ -1,0 +1,15 @@
+# configs/experiment/run_real.yaml
+# 给你的实验起个名字，保存模型和日志时可能会用到
+experiment_name: train_my_model
+# 1. 挂载数据：指向你配置好的真实数据集
+data:
+  config: configs/data/protein_dataset.yaml
+# 2. 挂载模型：指向你修改后的 EGNN 结构
+model:
+  config: configs/model/local_egnn.yaml
+# 3. 挂载损失函数：一般暂时用默认的就行
+loss:
+  config: configs/loss/vism_lite.yaml
+# 4. 挂载训练逻辑：指向你修改过 Batch size 和 Epochs 的配置
+train:
+  config: configs/train/base.yaml

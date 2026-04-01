@@ -1,6 +1,6 @@
-batch_size: 1
-num_workers: 0
-epochs: 50
+batch_size: 16
+num_workers: 2
+epochs: 2000
 lr: 1.0e-4
 weight_decay: 1.0e-5
 device: cuda
@@ -12,3 +12,5 @@ save_every: 5
 
 # Stability knobs for implicit-surface training.
 grad_clip_norm: 1.0
+
+
