@@ -11,6 +11,7 @@ from biomol_surface_unsup.datasets.collate import collate_fn
 from biomol_surface_unsup.datasets.molecule_dataset import MoleculeDataset
 from biomol_surface_unsup.losses.loss_builder import build_loss_fn
 from biomol_surface_unsup.models.surface_model import SurfaceModel
+from biomol_surface_unsup.training.loss_scheduler import LossWeightScheduler
 from biomol_surface_unsup.training.optimizer import build_optimizer
 from biomol_surface_unsup.training.train_step import train_step
 from biomol_surface_unsup.utils.config import normalize_loss_config
@@ -51,10 +52,23 @@ class Trainer:
             collate_fn=collate_fn,
         )
 
-        self.model = SurfaceModel(num_atom_types=self.train_dataset.num_atom_types).to(self.device)
+        self.model = SurfaceModel.from_config(cfg.get("model", {}), num_atom_types=self.train_dataset.num_atom_types).to(
+            self.device
+        )
         loss_runtime_cfg = dict(cfg)
         loss_runtime_cfg["loss"] = normalize_loss_config(cfg.get("loss", {}))
         self.loss_fn = build_loss_fn(loss_runtime_cfg)
+        loss_cfg = loss_runtime_cfg["loss"]
+        anneal_cfg = dict(loss_cfg.get("anneal", {}))
+        initial_weights = anneal_cfg.get("initial_weights")
+        final_weights = anneal_cfg.get("final_weights")
+        self.loss_weight_scheduler = None
+        if initial_weights is not None and final_weights is not None:
+            self.loss_weight_scheduler = LossWeightScheduler(
+                initial_weights=initial_weights,
+                final_weights=final_weights,
+                warmup_epochs=int(anneal_cfg.get("warmup_epochs", 0)),
+            )
         self.optimizer = build_optimizer(
             self.model,
             lr=float(train_cfg.get("lr", 1e-3)),
@@ -64,8 +78,16 @@ class Trainer:
     def train(self):
         num_epochs = int(self.cfg["train"].get("epochs", 1))
         for epoch in range(num_epochs):
+            loss_weights = None if self.loss_weight_scheduler is None else self.loss_weight_scheduler.get_weights(epoch)
             for step, batch in enumerate(self.train_loader):
-                metrics = train_step(self.model, batch, self.loss_fn, self.optimizer, self.device)
+                metrics = train_step(
+                    self.model,
+                    batch,
+                    self.loss_fn,
+                    self.optimizer,
+                    self.device,
+                    loss_weights=loss_weights,
+                )
                 print(f"epoch={epoch} step={step} metrics={metrics}")
 
     def evaluate(self):

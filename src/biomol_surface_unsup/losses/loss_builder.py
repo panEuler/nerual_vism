@@ -10,6 +10,7 @@ from biomol_surface_unsup.datasets.sampling import (
 from biomol_surface_unsup.losses.area import area_loss
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.eikonal import eikonal_loss
+from biomol_surface_unsup.losses.lj_body import lj_body_integral
 from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
 from biomol_surface_unsup.losses.volume import volume_loss
 from biomol_surface_unsup.losses.weak_prior import weak_prior_loss
@@ -22,7 +23,7 @@ QUERY_GROUP_IDS = {
     "surface_band": QUERY_GROUP_SURFACE_BAND,
 }
 
-SUPPORTED_LOSSES = ("containment", "weak_prior", "area", "pressure_volume", "volume", "eikonal")
+SUPPORTED_LOSSES = ("containment", "weak_prior", "area", "pressure_volume", "lj_body", "volume", "eikonal")
 
 
 def _batched_atomic_union_field(coords: torch.Tensor, radii: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
@@ -52,10 +53,21 @@ def build_loss_fn(cfg: dict[str, object]):
     heaviside_eps = float(loss_cfg.get("heaviside_eps", 0.1))
     containment_margin = float(loss_cfg.get("containment_margin", 0.5))
     pressure = float(loss_cfg.get("pressure", 0.01))
+    rho_0 = float(loss_cfg.get("rho_0", 0.0334))
 
-    def loss_fn(batch: dict[str, torch.Tensor], model_out: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def loss_fn(
+        batch: dict[str, torch.Tensor],
+        model_out: dict[str, torch.Tensor],
+        loss_weights: dict[str, float] | None = None,
+    ) -> dict[str, torch.Tensor]:
         coords = batch["coords"]  # [B, N, 3]
         radii = batch["radii"]  # [B, N]
+        epsilon = batch.get("epsilon")
+        sigma = batch.get("sigma")
+        if epsilon is None:
+            epsilon = radii.new_zeros(radii.shape)
+        if sigma is None:
+            sigma = radii.new_zeros(radii.shape)
         atom_mask = batch["atom_mask"]  # [B, N]
         query_points = batch["query_points"]  # [B, Q, 3]
         query_group = batch["query_group"]  # [B, Q]
@@ -70,6 +82,8 @@ def build_loss_fn(cfg: dict[str, object]):
             query_mask = query_mask.unsqueeze(0)
             coords = coords.unsqueeze(0)
             radii = radii.unsqueeze(0)
+            epsilon = epsilon.unsqueeze(0)
+            sigma = sigma.unsqueeze(0)
             atom_mask = atom_mask.unsqueeze(0)
         if not query_points.requires_grad:
             query_points = query_points.requires_grad_(True)
@@ -91,6 +105,17 @@ def build_loss_fn(cfg: dict[str, object]):
                 mask=loss_masks["pressure_volume"],
                 pressure=pressure,
                 eps=heaviside_eps,
+            ),
+            "lj_body": lj_body_integral(
+                pred_sdf=pred_sdf,
+                query_points=query_points,
+                coords=coords,
+                epsilon_lj=epsilon,
+                sigma_lj=sigma,
+                atom_mask=atom_mask,
+                mask=loss_masks["lj_body"],
+                rho_0=rho_0,
+                eps_h=heaviside_eps,
             ),
             "volume": volume_loss(
                 pred_sdf,
@@ -125,7 +150,10 @@ def build_loss_fn(cfg: dict[str, object]):
 
         total = pred_sdf.new_zeros(())
         for loss_name in SUPPORTED_LOSSES:
-            total = total + float(configured_losses[loss_name]["weight"]) * losses[loss_name]
+            weight = float(configured_losses[loss_name]["weight"])
+            if loss_weights is not None and loss_name in loss_weights:
+                weight = float(loss_weights[loss_name])
+            total = total + weight * losses[loss_name]
         losses["total"] = total
         return losses
 

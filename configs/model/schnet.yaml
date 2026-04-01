@@ -1,19 +1,19 @@
-name: local_deepsets
+name: schnet
 local_builder:
   atom_embed_dim: 16
   rbf_dim: 16
   cutoff: 8.0
   max_neighbors: 64
 local_encoder:
-  type: deepsets
+  type: schnet
   hidden_dim: 128
   out_dim: 128
-  num_layers: 2
+  num_layers: 3
 global_encoder:
   hidden_dim: 128
   out_dim: 128
 decoder:
-  type: mlp
+  type: siren
   hidden_dim: 128
   num_layers: 3
 position_encoding:

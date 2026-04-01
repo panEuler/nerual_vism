@@ -15,7 +15,11 @@ losses:
     groups: [surface_band]
   pressure_volume:
     # Pressure-volume stays very small in the baseline for stability.
-    weight: 0.0
+    weight: 0.5
+    groups: [global]
+  lj_body:
+    # LJ body term is disabled in phase 1 and annealed in later.
+    weight: 0.1
     groups: [global]
   volume:
     # Disable the old toy volume-fraction target in the baseline.
@@ -27,7 +31,26 @@ losses:
     groups: [global, surface_band]
 
 pressure: 0.01
+rho_0: 0.0334
 target_volume_fraction: 0.5
 heaviside_eps: 0.1
 delta_eps: 0.1
 containment_margin: 0.5
+anneal:
+  warmup_epochs: 5
+  initial_weights:
+    containment: 2.0
+    weak_prior: 1.0
+    area: 0.0
+    pressure_volume: 0.0
+    lj_body: 0.0
+    volume: 0.0
+    eikonal: 0.5
+  final_weights:
+    containment: 2.0
+    weak_prior: 0.0
+    area: 1.0
+    pressure_volume: 0.5
+    lj_body: 0.1
+    volume: 0.0
+    eikonal: 0.5

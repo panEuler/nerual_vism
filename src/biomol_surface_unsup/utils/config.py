@@ -8,6 +8,7 @@ DEFAULT_LOSS_GROUPS = {
     "weak_prior": ["surface_band"],
     "area": ["surface_band"],
     "pressure_volume": ["global"],
+    "lj_body": ["global"],
     "volume": ["global"],
     "eikonal": ["global", "surface_band"],
 }
@@ -17,6 +18,7 @@ DEFAULT_LOSS_WEIGHTS = {
     "weak_prior": 0.5,
     "area": 1.0,
     "pressure_volume": 0.0,
+    "lj_body": 0.0,
     "volume": 0.0,
     "eikonal": 0.5,
 }
@@ -26,6 +28,7 @@ LEGACY_LOSS_WEIGHT_KEYS = {
     "weak_prior": "lambda_prior",
     "area": "lambda_area",
     "pressure_volume": "lambda_volume",
+    "lj_body": "lambda_lj",
     "volume": "lambda_volume",
     "eikonal": "lambda_eikonal",
 }

@@ -8,6 +8,7 @@ torch = pytest.importorskip("torch")
 from biomol_surface_unsup.datasets.collate import collate_fn
 from biomol_surface_unsup.datasets.molecule_dataset import MoleculeDataset
 from biomol_surface_unsup.features.global_features import GlobalFeatureEncoder
+from biomol_surface_unsup.models.positional_encoding import FourierEncoder
 from biomol_surface_unsup.models.surface_model import SurfaceModel
 
 
@@ -64,3 +65,29 @@ def test_global_feature_encoder_is_translation_invariant_with_atom_mask():
     shifted = encoder(coords + shift, atom_types, radii, atom_mask=atom_mask)
 
     assert torch.allclose(base, shifted, atol=1e-5, rtol=1e-5)
+
+
+def test_surface_model_from_config_builds_schnet_siren_variant():
+    model = SurfaceModel.from_config(
+        {
+            "local_builder": {"atom_embed_dim": 8, "rbf_dim": 8, "cutoff": 6.0, "max_neighbors": 16},
+            "local_encoder": {"type": "schnet", "hidden_dim": 32, "out_dim": 24, "num_layers": 2},
+            "global_encoder": {"hidden_dim": 32, "out_dim": 20},
+            "decoder": {"type": "siren", "hidden_dim": 48, "num_layers": 3},
+            "position_encoding": {"enabled": True, "n_freq": 4},
+        },
+        num_atom_types=16,
+    )
+    dataset = MoleculeDataset(num_samples=1, num_query_points=8)
+    sample = dataset[0]
+    out = model(sample["coords"], sample["atom_types"], sample["radii"], sample["query_points"])
+    assert out["sdf"].shape == (8,)
+    assert out["z_local"].shape[-1] == 24
+    assert out["z_global"].shape[-1] == 20
+
+
+def test_fourier_encoder_output_dimension():
+    encoder = FourierEncoder(d_in=3, n_freq=6)
+    x = torch.zeros((2, 5, 3), dtype=torch.float32)
+    y = encoder(x)
+    assert y.shape == (2, 5, 39)
