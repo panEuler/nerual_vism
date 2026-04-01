@@ -45,6 +45,10 @@ def collate_fn(batch):
     coords = _pad_tensor_2d([sample["coords"] for sample in batch], max_atoms)
     atom_types = _pad_tensor_1d([sample["atom_types"] for sample in batch], max_atoms, pad_value=0)
     radii = _pad_tensor_1d([sample["radii"] for sample in batch], max_atoms, pad_value=0.0)
+    charges = _pad_tensor_1d([sample["charges"] for sample in batch], max_atoms, pad_value=0.0)
+    epsilon = _pad_tensor_1d([sample["epsilon"] for sample in batch], max_atoms, pad_value=0.0)
+    sigma = _pad_tensor_1d([sample["sigma"] for sample in batch], max_atoms, pad_value=0.0)
+    res_ids = _pad_tensor_1d([sample["res_ids"] for sample in batch], max_atoms, pad_value=0)
     atom_mask = torch.zeros((len(batch), max_atoms), dtype=torch.bool)
 
     query_points = _pad_tensor_2d([sample["query_points"] for sample in batch], max_queries)
@@ -69,7 +73,13 @@ def collate_fn(batch):
         "coords": coords,
         "atom_types": atom_types,
         "radii": radii,
+        "charges": charges,
+        "epsilon": epsilon,
+        "sigma": sigma,
+        "res_ids": res_ids,
         "atom_mask": atom_mask,
+        "atom_names": [sample["atom_names"] for sample in batch],
+        "res_names": [sample["res_names"] for sample in batch],
         "query_points": query_points,
         "query_group": query_group,
         "query_mask": query_mask,

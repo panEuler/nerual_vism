@@ -14,8 +14,9 @@ from biomol_surface_unsup.models.surface_model import SurfaceModel
 def test_model_forward_single_sample_keeps_compatibility():
     dataset = MoleculeDataset(num_query_points=32)
     sample = dataset[0]
+    expected_neighbors = min(sample["coords"].shape[0], 64)
 
-    model = SurfaceModel(num_atom_types=16)
+    model = SurfaceModel(num_atom_types=dataset.num_atom_types)
     out = model(
         sample["coords"],
         sample["atom_types"],
@@ -23,15 +24,16 @@ def test_model_forward_single_sample_keeps_compatibility():
         sample["query_points"],
     )
     assert out["sdf"].shape == (32,)
-    assert out["features"].shape[:2] == (32, 4)
-    assert out["mask"].shape[:2] == (32, 4)
+    assert out["features"].shape[:2] == (32, expected_neighbors)
+    assert out["mask"].shape[:2] == (32, expected_neighbors)
 
 
 def test_model_forward_batched_uses_atom_and_query_masks():
-    dataset = MoleculeDataset(num_samples=2, num_atoms=4, num_query_points=8)
+    dataset = MoleculeDataset(num_samples=2, num_query_points=8)
     batch = collate_fn([dataset[0], dataset[1]])
+    expected_neighbors = min(batch["coords"].shape[1], 64)
 
-    model = SurfaceModel(num_atom_types=16)
+    model = SurfaceModel(num_atom_types=dataset.num_atom_types)
     out = model(
         batch["coords"],
         batch["atom_types"],
@@ -41,10 +43,10 @@ def test_model_forward_batched_uses_atom_and_query_masks():
         query_mask=batch["query_mask"],
     )
     assert out["sdf"].shape == (2, 8)
-    assert out["features"].shape[:3] == (2, 8, 4)
-    assert out["mask"].shape == (2, 8, 4)
+    assert out["features"].shape[:3] == (2, 8, expected_neighbors)
+    assert out["mask"].shape == (2, 8, expected_neighbors)
     assert torch.all(out["sdf"][~batch["query_mask"]] == 0.0)
-    assert not torch.any(out["mask"][1, :, 3])
+    assert torch.equal(out["mask"], out["mask"] & batch["query_mask"].unsqueeze(-1))
 
 
 def test_global_feature_encoder_is_translation_invariant_with_atom_mask():

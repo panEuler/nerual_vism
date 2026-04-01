@@ -1,8 +1,9 @@
 dataset_name: toy
-root: data/processed/toy
+root: data/processed
 train_split: train
 val_split: val
 test_split: test
 num_query_points: 512
 bbox_padding: 4.0
-surface_bandwidth: 1.0
+surface_band_width: 0.25
+containment_jitter: 0.15

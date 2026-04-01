@@ -32,12 +32,16 @@ class Trainer:
         batch_size = int(train_cfg.get("batch_size", 1))
         dataset_num_samples = int(data_cfg.get("num_samples", max(batch_size, 2)))
         self.train_dataset = MoleculeDataset(
-            root=data_cfg.get("root", "data/processed/toy"),
+            root=data_cfg.get("root", "data/processed"),
             split=data_cfg.get("train_split", "train"),
             num_samples=dataset_num_samples,
             num_atoms=int(data_cfg.get("num_atoms", 4)),
             num_query_points=int(data_cfg.get("num_query_points", 32)),
             bbox_padding=float(data_cfg.get("bbox_padding", 2.0)),
+            containment_jitter=float(data_cfg.get("containment_jitter", 0.15)),
+            surface_band_width=float(
+                data_cfg.get("surface_band_width", data_cfg.get("surface_bandwidth", 0.25))
+            ),
         )
         self.train_loader = DataLoader(
             self.train_dataset,
@@ -47,7 +51,7 @@ class Trainer:
             collate_fn=collate_fn,
         )
 
-        self.model = SurfaceModel(num_atom_types=16).to(self.device)
+        self.model = SurfaceModel(num_atom_types=self.train_dataset.num_atom_types).to(self.device)
         loss_runtime_cfg = dict(cfg)
         loss_runtime_cfg["loss"] = normalize_loss_config(cfg.get("loss", {}))
         self.loss_fn = build_loss_fn(loss_runtime_cfg)
