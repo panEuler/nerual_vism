@@ -13,6 +13,44 @@ QUERY_GROUP_CONTAINMENT = 1
 QUERY_GROUP_SURFACE_BAND = 2
 
 
+def _infer_bond_pairs(coords: torch.Tensor, radii: torch.Tensor) -> torch.Tensor:
+    if coords.shape[0] < 2:
+        return torch.empty((0, 2), dtype=torch.long, device=coords.device)
+    pair_index = torch.triu_indices(coords.shape[0], coords.shape[0], offset=1, device=coords.device)
+    pair_dist = (coords[pair_index[0]] - coords[pair_index[1]]).norm(dim=-1)
+    pair_cutoff = radii[pair_index[0]] + radii[pair_index[1]] + 0.5
+    pair_mask = pair_dist <= pair_cutoff
+    return pair_index[:, pair_mask].transpose(0, 1)
+
+
+def _sample_convex_hull_interior(
+    coords: torch.Tensor,
+    radii: torch.Tensor,
+    num_points: int,
+    max_attempt_factor: int = 8,
+) -> torch.Tensor:
+    if num_points <= 0:
+        return coords.new_empty((0, 3))
+
+    accepted: list[torch.Tensor] = []
+    attempts = 0
+    max_attempts = max(num_points * max_attempt_factor, num_points)
+    while sum(point.shape[0] for point in accepted) < num_points and attempts < max_attempts:
+        remaining = num_points - sum(point.shape[0] for point in accepted)
+        weights = torch.rand(remaining, coords.shape[0], dtype=coords.dtype, device=coords.device)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        candidates = weights @ coords
+        candidate_sdf = approximate_atomic_union_sdf(coords, radii, candidates)
+        inside = candidates[candidate_sdf <= 0.0]
+        if inside.numel() > 0:
+            accepted.append(inside[:remaining])
+        attempts += remaining
+
+    if accepted:
+        return torch.cat(accepted, dim=0)[:num_points]
+    return coords.new_empty((0, 3))
+
+
 def _compute_bbox(coords: torch.Tensor, radii: torch.Tensor | None, padding: float) -> tuple[torch.Tensor, torch.Tensor]:
     """Return bbox bounds with shape [3]."""
     if radii is not None:
@@ -81,12 +119,35 @@ def sample_query_points(
         device=coords.device,
     ) * (upper - lower).unsqueeze(0)
 
-    atom_index = torch.arange(num_containment, device=coords.device) % coords.shape[0]
-    base_centers = coords[atom_index]  # [Qc, 3]
-    jitter_dir = torch.randn(num_containment, 3, dtype=coords.dtype, device=coords.device)
+    num_atom_containment = max(1, num_containment // 2)
+    remaining_containment = num_containment - num_atom_containment
+    num_midpoint = remaining_containment // 2
+    num_hull = remaining_containment - num_midpoint
+
+    atom_index = torch.arange(num_atom_containment, device=coords.device) % coords.shape[0]
+    base_centers = coords[atom_index]
+    jitter_dir = torch.randn(num_atom_containment, 3, dtype=coords.dtype, device=coords.device)
     jitter_dir = jitter_dir / jitter_dir.norm(dim=-1, keepdim=True).clamp_min(1e-6)
     jitter_scale = (radii[atom_index] * containment_jitter).unsqueeze(-1)
-    containment_points = base_centers + jitter_dir * jitter_scale  # [Qc, 3]
+    atom_containment = base_centers + jitter_dir * jitter_scale
+
+    bond_pairs = _infer_bond_pairs(coords, radii)
+    if bond_pairs.shape[0] > 0 and num_midpoint > 0:
+        midpoint_index = torch.arange(num_midpoint, device=coords.device) % bond_pairs.shape[0]
+        selected_pairs = bond_pairs[midpoint_index]
+        midpoint_points = 0.5 * (coords[selected_pairs[:, 0]] + coords[selected_pairs[:, 1]])
+    else:
+        midpoint_points = coords.new_empty((0, 3))
+
+    hull_points = _sample_convex_hull_interior(coords, radii, num_hull)
+    containment_chunks = [atom_containment, midpoint_points, hull_points]
+    containment_points = torch.cat([chunk for chunk in containment_chunks if chunk.shape[0] > 0], dim=0)
+    if containment_points.shape[0] < num_containment:
+        pad_count = num_containment - containment_points.shape[0]
+        fallback_index = torch.arange(pad_count, device=coords.device) % coords.shape[0]
+        fallback_points = coords[fallback_index]
+        containment_points = torch.cat([containment_points, fallback_points], dim=0)
+    containment_points = containment_points[:num_containment]
 
     candidate_count = max(num_surface * 8, num_surface)
     candidate_points = lower.unsqueeze(0) + torch.rand(

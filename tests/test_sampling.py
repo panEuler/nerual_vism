@@ -41,3 +41,19 @@ def test_surface_band_points_are_close_to_toy_atomic_union_boundary() -> None:
 
     assert surface_points.shape[0] == sampling["sampling_counts"]["surface_band"]
     assert torch.all(band_sdf.abs() <= 0.5)
+
+
+def test_containment_points_cover_interstitial_regions_inside_atomic_union() -> None:
+    torch.manual_seed(2)
+    coords = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [0.7, 1.2, 0.0]],
+        dtype=torch.float32,
+    )
+    radii = torch.tensor([1.1, 1.1, 1.0], dtype=torch.float32)
+
+    sampling = sample_query_points(coords=coords, radii=radii, num_query_points=12, padding=1.5)
+    containment_points = sampling["containment_points"]
+    containment_sdf = approximate_atomic_union_sdf(coords, radii, containment_points)
+
+    assert containment_points.shape[0] == sampling["sampling_counts"]["containment"]
+    assert torch.all(containment_sdf <= 0.0)

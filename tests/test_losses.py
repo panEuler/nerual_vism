@@ -11,6 +11,7 @@ from biomol_surface_unsup.datasets.sampling import (
     QUERY_GROUP_SURFACE_BAND,
 )
 from biomol_surface_unsup.losses.containment import containment_loss
+from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
 from biomol_surface_unsup.losses.loss_builder import build_loss, build_loss_fn
 from biomol_surface_unsup.training.train_step import train_step
 from biomol_surface_unsup.utils.config import normalize_loss_config
@@ -77,15 +78,26 @@ def test_normalize_loss_config_preserves_default_behavior() -> None:
             "lambda_volume": 0.5,
             "lambda_containment": 2.0,
             "lambda_prior": 0.5,
-            "lambda_eikonal": 0.1,
+            "lambda_eikonal": 0.5,
         }
     )
 
     assert normalized["losses"]["containment"] == {"weight": 2.0, "groups": ["containment"]}
     assert normalized["losses"]["weak_prior"] == {"weight": 0.5, "groups": ["surface_band"]}
     assert normalized["losses"]["area"] == {"weight": 1.0, "groups": ["surface_band"]}
+    assert normalized["losses"]["pressure_volume"] == {"weight": 0.5, "groups": ["global"]}
     assert normalized["losses"]["volume"] == {"weight": 0.5, "groups": ["global"]}
-    assert normalized["losses"]["eikonal"] == {"weight": 0.1, "groups": ["global", "surface_band"]}
+    assert normalized["losses"]["eikonal"] == {"weight": 0.5, "groups": ["global", "surface_band"]}
+
+
+def test_pressure_volume_loss_matches_smoothed_exterior_fraction() -> None:
+    pred_sdf = torch.tensor([[-1.0, 0.0, 1.0]], dtype=torch.float32)
+    mask = torch.tensor([[True, True, False]])
+
+    value = pressure_volume_loss(pred_sdf, mask=mask, pressure=0.2, eps=0.1)
+    expected = 0.2 * torch.tensor([0.0317255, 0.5], dtype=torch.float32).mean()
+
+    assert value.item() == pytest.approx(expected.item(), rel=1e-4)
 
 
 def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:
@@ -97,8 +109,9 @@ def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:
                     "containment": {"weight": 2.0, "groups": ["containment"]},
                     "weak_prior": {"weight": 0.5, "groups": ["surface_band"]},
                     "area": {"weight": 1.0, "groups": ["surface_band"]},
-                    "volume": {"weight": 0.5, "groups": ["global"]},
-                    "eikonal": {"weight": 0.1, "groups": ["global", "surface_band"]},
+                    "pressure_volume": {"weight": 0.5, "groups": ["global"]},
+                    "volume": {"weight": 0.0, "groups": ["global"]},
+                    "eikonal": {"weight": 0.5, "groups": ["global", "surface_band"]},
                 },
                 "containment_margin": 0.5,
             }
@@ -106,12 +119,13 @@ def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:
     )
 
     losses = loss_fn(batch, {"sdf": pred_sdf})
-    assert {"area", "volume", "containment", "weak_prior", "eikonal", "total"}.issubset(losses)
+    assert {"area", "pressure_volume", "volume", "containment", "weak_prior", "eikonal", "total"}.issubset(losses)
     assert losses["containment_count"].item() == 2.0
     assert losses["global_count"].item() == 2.0
     assert losses["surface_band_count"].item() == 2.0
     assert losses["weak_prior_count"].item() == 2.0
     assert losses["area_count"].item() == 2.0
+    assert losses["pressure_volume_count"].item() == 2.0
     assert losses["volume_count"].item() == 2.0
     assert losses["eikonal_count"].item() == 4.0
     assert losses["containment"].ndim == 0
@@ -128,7 +142,8 @@ def test_build_loss_fn_supports_multi_group_union_masks() -> None:
                     "containment": {"weight": 1.0, "groups": ["containment", "surface_band"]},
                     "weak_prior": {"weight": 1.0, "groups": ["surface_band"]},
                     "area": {"weight": 1.0, "groups": ["surface_band"]},
-                    "volume": {"weight": 1.0, "groups": ["global"]},
+                    "pressure_volume": {"weight": 1.0, "groups": ["global"]},
+                    "volume": {"weight": 0.0, "groups": ["global"]},
                     "eikonal": {"weight": 1.0, "groups": ["global", "surface_band"]},
                 }
             }
@@ -159,6 +174,7 @@ def test_build_loss_fn_handles_empty_masks_from_configured_groups() -> None:
                     "containment": {"weight": 1.0, "groups": []},
                     "weak_prior": {"weight": 1.0, "groups": ["surface_band"]},
                     "area": {"weight": 1.0, "groups": ["surface_band"]},
+                    "pressure_volume": {"weight": 1.0, "groups": []},
                     "volume": {"weight": 1.0, "groups": ["global"]},
                     "eikonal": {"weight": 1.0, "groups": []},
                 }
@@ -175,6 +191,8 @@ def test_build_loss_fn_handles_empty_masks_from_configured_groups() -> None:
     assert losses["containment_count"].item() == pytest.approx(0.0)
     assert losses["eikonal"].item() == pytest.approx(0.0)
     assert losses["eikonal_count"].item() == pytest.approx(0.0)
+    assert losses["pressure_volume"].item() == pytest.approx(0.0)
+    assert losses["pressure_volume_count"].item() == pytest.approx(0.0)
     assert losses["volume_count"].item() == pytest.approx(4.0)
 
 

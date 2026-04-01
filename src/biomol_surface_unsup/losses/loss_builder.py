@@ -10,6 +10,7 @@ from biomol_surface_unsup.datasets.sampling import (
 from biomol_surface_unsup.losses.area import area_loss
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.eikonal import eikonal_loss
+from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
 from biomol_surface_unsup.losses.volume import volume_loss
 from biomol_surface_unsup.losses.weak_prior import weak_prior_loss
 from biomol_surface_unsup.utils.config import normalize_loss_config
@@ -21,7 +22,7 @@ QUERY_GROUP_IDS = {
     "surface_band": QUERY_GROUP_SURFACE_BAND,
 }
 
-SUPPORTED_LOSSES = ("containment", "weak_prior", "area", "volume", "eikonal")
+SUPPORTED_LOSSES = ("containment", "weak_prior", "area", "pressure_volume", "volume", "eikonal")
 
 
 def _batched_atomic_union_field(coords: torch.Tensor, radii: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
@@ -50,6 +51,7 @@ def build_loss_fn(cfg: dict[str, object]):
     delta_eps = float(loss_cfg.get("delta_eps", 0.1))
     heaviside_eps = float(loss_cfg.get("heaviside_eps", 0.1))
     containment_margin = float(loss_cfg.get("containment_margin", 0.5))
+    pressure = float(loss_cfg.get("pressure", 0.01))
 
     def loss_fn(batch: dict[str, torch.Tensor], model_out: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         coords = batch["coords"]  # [B, N, 3]
@@ -84,6 +86,12 @@ def build_loss_fn(cfg: dict[str, object]):
 
         losses = {
             "area": area_loss(pred_sdf, query_points, mask=loss_masks["area"], eps=delta_eps),
+            "pressure_volume": pressure_volume_loss(
+                pred_sdf,
+                mask=loss_masks["pressure_volume"],
+                pressure=pressure,
+                eps=heaviside_eps,
+            ),
             "volume": volume_loss(
                 pred_sdf,
                 mask=loss_masks["volume"],

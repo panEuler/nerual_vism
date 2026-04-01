@@ -13,15 +13,20 @@ losses:
     # Area regularization is evaluated on near-surface samples.
     weight: 1.0
     groups: [surface_band]
+  pressure_volume:
+    # Pressure-volume stays very small in the baseline for stability.
+    weight: 0.0
+    groups: [global]
   volume:
-    # Volume matching stays on broad global-space samples.
-    weight: 0.5
+    # Disable the old toy volume-fraction target in the baseline.
+    weight: 0.0
     groups: [global]
   eikonal:
     # Eikonal uses the union of global + surface-band samples by default.
-    weight: 0.1
+    weight: 0.5
     groups: [global, surface_band]
 
+pressure: 0.01
 target_volume_fraction: 0.5
 heaviside_eps: 0.1
 delta_eps: 0.1

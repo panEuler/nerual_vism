@@ -15,7 +15,7 @@ def eikonal_loss(
         return pred_sdf.new_zeros(())
 
     grads = _safe_query_grads(pred_sdf, query_points)
-    penalty = (grads.norm(dim=-1) - 1.0).pow(2)
+    penalty = (grads.norm(dim=-1) - 1.0).abs()
     if mask is not None:
         penalty = penalty[mask]
     return penalty.mean()
