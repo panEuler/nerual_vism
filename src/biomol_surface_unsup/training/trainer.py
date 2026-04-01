@@ -58,7 +58,7 @@ class Trainer:
         )
         loss_runtime_cfg = dict(cfg)
         loss_runtime_cfg["loss"] = normalize_loss_config(cfg.get("loss", {}))
-        self.loss_fn = build_loss_fn(loss_runtime_cfg)
+        self.loss_fn = build_loss_fn(loss_runtime_cfg) # 如何组装的
         loss_cfg = loss_runtime_cfg["loss"]
         anneal_cfg = dict(loss_cfg.get("anneal", {}))
         initial_weights = anneal_cfg.get("initial_weights")
