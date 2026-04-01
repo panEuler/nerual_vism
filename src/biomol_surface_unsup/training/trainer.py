@@ -30,6 +30,7 @@ class Trainer:
 
         data_cfg = cfg["data"]
         train_cfg = cfg["train"]
+        self.grad_clip_norm = train_cfg.get("grad_clip_norm")
         batch_size = int(train_cfg.get("batch_size", 1))
         dataset_num_samples = int(data_cfg.get("num_samples", max(batch_size, 2)))
         self.train_dataset = MoleculeDataset(
@@ -87,6 +88,7 @@ class Trainer:
                     self.optimizer,
                     self.device,
                     loss_weights=loss_weights,
+                    grad_clip_norm=self.grad_clip_norm,
                 )
                 print(f"epoch={epoch} step={step} metrics={metrics}")
 

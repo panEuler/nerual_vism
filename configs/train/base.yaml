@@ -1,2 +1,14 @@
-epochs: 1
 batch_size: 1
+num_workers: 0
+epochs: 50
+lr: 1.0e-4
+weight_decay: 1.0e-5
+device: cuda
+seed: 42
+
+# Logging / checkpoint cadence for real-data training.
+log_every: 10
+save_every: 5
+
+# Stability knobs for implicit-surface training.
+grad_clip_norm: 1.0

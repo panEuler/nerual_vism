@@ -272,3 +272,27 @@ def test_train_step_runs_backward_and_optimizer_step_on_batched_toy_batch() -> N
     assert metrics["volume_count"] == pytest.approx(2.0)
     assert metrics["containment_count"] == pytest.approx(2.0)
     assert not torch.allclose(before, after)
+
+
+def test_train_step_reports_grad_norm_when_clipping_enabled() -> None:
+    class TinyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.tensor(5.0, dtype=torch.float32))
+
+        def forward(self, coords, atom_types, radii, query_points, atom_mask=None, query_mask=None):
+            del coords, atom_types, radii, atom_mask
+            sdf = self.scale * query_points.pow(2).sum(dim=-1)
+            if query_mask is not None:
+                sdf = sdf * query_mask.to(sdf.dtype)
+            return {"sdf": sdf}
+
+    batch, _ = _build_batch()
+    loss_fn = build_loss_fn({"loss": {}})
+    model = TinyModel()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+
+    metrics = train_step(model, batch, loss_fn, optimizer, device="cpu", grad_clip_norm=0.1)
+
+    assert "grad_norm" in metrics
+    assert metrics["grad_norm"] >= 0.0
