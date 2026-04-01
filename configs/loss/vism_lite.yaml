@@ -37,7 +37,7 @@ heaviside_eps: 0.1
 delta_eps: 0.1
 containment_margin: 0.5
 anneal:
-  warmup_epochs: 5
+  warmup_epochs: 200
   initial_weights:
     containment: 2.0
     weak_prior: 1.0

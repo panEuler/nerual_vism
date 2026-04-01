@@ -30,6 +30,11 @@ def _safe_query_grads(pred_sdf: torch.Tensor, query_points: torch.Tensor) -> tor
     return grads
 
 
+def _stable_grad_norm(grads: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Numerically stable gradient norm used inside higher-order losses."""
+    return torch.sqrt(grads.pow(2).sum(dim=-1) + float(eps))
+
+
 def area_loss(
     pred_sdf: torch.Tensor,
     query_points: torch.Tensor,
@@ -47,7 +52,7 @@ def area_loss(
         return pred_sdf.new_zeros(())
 
     grads = _safe_query_grads(pred_sdf, query_points)
-    integrand = smooth_delta(pred_sdf, eps) * grads.norm(dim=-1)
+    integrand = smooth_delta(pred_sdf, eps) * _stable_grad_norm(grads)
     if mask is not None:
         integrand = integrand[mask]
     return integrand.mean()

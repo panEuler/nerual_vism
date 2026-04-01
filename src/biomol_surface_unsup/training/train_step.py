@@ -1,6 +1,13 @@
 import torch
 
 
+def _has_nonfinite_gradients(model) -> bool:
+    for param in model.parameters():
+        if param.grad is not None and not torch.isfinite(param.grad).all():
+            return True
+    return False
+
+
 def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad_clip_norm=None):
     model.train()
     coords = batch["coords"].to(device)
@@ -45,10 +52,18 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
         loss_weights=loss_weights,
     )
     optimizer.zero_grad()
+    if not torch.isfinite(losses["total"]):
+        raise ValueError(f"non-finite total loss before backward: {float(losses['total'].detach().cpu())}")
     losses["total"].backward()
     grad_norm = None
     if grad_clip_norm is not None:
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(grad_clip_norm))
+        if not torch.isfinite(grad_norm):
+            optimizer.zero_grad(set_to_none=True)
+            raise ValueError("non-finite gradient norm encountered during clipping")
+    if _has_nonfinite_gradients(model):
+        optimizer.zero_grad(set_to_none=True)
+        raise ValueError("non-finite gradients encountered before optimizer step")
     optimizer.step()
 
     metrics = {k: float(v.detach().cpu()) for k, v in losses.items()}

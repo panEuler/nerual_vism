@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from .area import _safe_query_grads
+from .area import _safe_query_grads, _stable_grad_norm
 
 
 def eikonal_loss(
@@ -15,7 +15,7 @@ def eikonal_loss(
         return pred_sdf.new_zeros(())
 
     grads = _safe_query_grads(pred_sdf, query_points)
-    penalty = (grads.norm(dim=-1) - 1.0).abs()
+    penalty = (_stable_grad_norm(grads) - 1.0).abs()
     if mask is not None:
         penalty = penalty[mask]
     return penalty.mean()

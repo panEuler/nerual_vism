@@ -145,7 +145,10 @@ def sample_query_points(
     if containment_points.shape[0] < num_containment:
         pad_count = num_containment - containment_points.shape[0]
         fallback_index = torch.arange(pad_count, device=coords.device) % coords.shape[0]
-        fallback_points = coords[fallback_index]
+        fallback_dir = torch.randn(pad_count, 3, dtype=coords.dtype, device=coords.device)
+        fallback_dir = fallback_dir / fallback_dir.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        fallback_scale = (radii[fallback_index] * 1e-3).unsqueeze(-1)
+        fallback_points = coords[fallback_index] + fallback_dir * fallback_scale
         containment_points = torch.cat([containment_points, fallback_points], dim=0)
     containment_points = containment_points[:num_containment]
 

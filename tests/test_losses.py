@@ -11,12 +11,15 @@ from biomol_surface_unsup.datasets.sampling import (
     QUERY_GROUP_SURFACE_BAND,
 )
 from biomol_surface_unsup.losses.containment import containment_loss
+from biomol_surface_unsup.losses.eikonal import eikonal_loss
 from biomol_surface_unsup.losses.lj_body import lj_body_integral
 from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
+from biomol_surface_unsup.losses.area import area_loss
 from biomol_surface_unsup.losses.loss_builder import build_loss, build_loss_fn
 from biomol_surface_unsup.training.loss_scheduler import LossWeightScheduler
 from biomol_surface_unsup.training.train_step import train_step
 from biomol_surface_unsup.utils.config import normalize_loss_config
+from biomol_surface_unsup.models.surface_model import SurfaceModel
 
 
 def test_build_loss_and_call() -> None:
@@ -140,6 +143,38 @@ def test_loss_weight_scheduler_linearly_interpolates() -> None:
     assert scheduler.get_weights(0) == pytest.approx({"area": 0.0, "weak_prior": 1.0})
     assert scheduler.get_weights(2) == pytest.approx({"area": 0.5, "weak_prior": 0.5})
     assert scheduler.get_weights(4) == pytest.approx({"area": 1.0, "weak_prior": 0.0})
+
+
+def test_area_and_eikonal_backward_remain_finite_at_zero_query_gradients() -> None:
+    query_points = torch.zeros((1, 4, 3), dtype=torch.float32, requires_grad=True)
+    pred_sdf = (query_points * 0.0).sum(dim=-1)
+    mask = torch.ones((1, 4), dtype=torch.bool)
+
+    total = area_loss(pred_sdf, query_points, mask=mask) + eikonal_loss(pred_sdf, query_points, mask=mask)
+    total.backward()
+
+    assert torch.isfinite(query_points.grad).all()
+
+
+def test_area_and_eikonal_backward_remain_finite_with_query_on_atom_center() -> None:
+    model = SurfaceModel(num_atom_types=16)
+    coords = torch.tensor([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.0, 1.5, 0.0]], dtype=torch.float32)
+    atom_types = torch.tensor([1, 6, 8], dtype=torch.long)
+    radii = torch.tensor([1.2, 1.3, 1.1], dtype=torch.float32)
+    query_points = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.2, 0.1, 0.0], [0.0, 1.0, 0.5]],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    pred_sdf = model(coords, atom_types, radii, query_points)["sdf"]
+    mask = torch.ones_like(pred_sdf, dtype=torch.bool)
+
+    total = area_loss(pred_sdf, query_points, mask=mask) + eikonal_loss(pred_sdf, query_points, mask=mask)
+    total.backward()
+
+    for param in model.parameters():
+        if param.grad is not None:
+            assert torch.isfinite(param.grad).all()
 
 
 def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:

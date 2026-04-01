@@ -42,6 +42,15 @@ class LocalFeatureBuilder(nn.Module):
         self.rbf_gamma = float(gamma)
         self.feature_dim = 3 + 1 + atom_embed_dim + rbf_dim + 1
 
+    @staticmethod
+    def _stable_pairwise_distance(
+        query_points: torch.Tensor,
+        coords: torch.Tensor,
+        eps: float = 1e-12,
+    ) -> torch.Tensor:
+        diff = query_points.unsqueeze(2) - coords.unsqueeze(1)
+        return torch.sqrt(diff.pow(2).sum(dim=-1) + float(eps))
+
     def forward(
         self,
         coords: torch.Tensor,
@@ -84,7 +93,7 @@ class LocalFeatureBuilder(nn.Module):
                 return {k_: v.squeeze(0) for k_, v in result.items()}
             return result
 
-        dists = torch.cdist(query_points, coords)  # [B, Q, N]
+        dists = self._stable_pairwise_distance(query_points, coords)  # [B, Q, N]
         masked_dists = dists.masked_fill(~atom_mask.unsqueeze(1), float("inf"))
         sorted_dists, sorted_indices = torch.topk(masked_dists, k=k, dim=-1, largest=False)
 

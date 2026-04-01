@@ -32,23 +32,23 @@ class Trainer:
         train_cfg = cfg["train"]
         self.grad_clip_norm = train_cfg.get("grad_clip_norm")
         batch_size = int(train_cfg.get("batch_size", 1))
-        dataset_num_samples = int(data_cfg.get("num_samples", max(batch_size, 2)))
+        raw_num_samples = data_cfg.get("num_samples")
+        dataset_num_samples = int(raw_num_samples) if raw_num_samples is not None else None
         self.train_dataset = MoleculeDataset(
             root=data_cfg.get("root", "data/processed"),
             split=data_cfg.get("train_split", "train"),
             num_samples=dataset_num_samples,
-            num_atoms=int(data_cfg.get("num_atoms", 4)),
             num_query_points=int(data_cfg.get("num_query_points", 32)),
-            bbox_padding=float(data_cfg.get("bbox_padding", 2.0)),
-            containment_jitter=float(data_cfg.get("containment_jitter", 0.15)),
+            bbox_padding=float(data_cfg.get("bbox_padding", 2.0)), # bbox_paddiing 不清楚
+            containment_jitter=float(data_cfg.get("containment_jitter", 0.15)), # 包裹损失
             surface_band_width=float(
-                data_cfg.get("surface_band_width", data_cfg.get("surface_bandwidth", 0.25))
+                data_cfg.get("surface_band_width", data_cfg.get("surface_band_width", 0.25))
             ),
         )
         self.train_loader = DataLoader(
             self.train_dataset,
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=False, # 为什么不打乱
             num_workers=int(train_cfg.get("num_workers", 0)),
             collate_fn=collate_fn,
         )
