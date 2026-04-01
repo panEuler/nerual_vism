@@ -27,7 +27,11 @@ class GlobalFeatureEncoder(nn.Module):
             atom_mask = torch.ones(atom_types.shape, dtype=torch.bool, device=atom_types.device)
 
         atom_emb = self.atom_embedding(atom_types)
-        x = torch.cat([coords, atom_emb, radii.unsqueeze(-1)], dim=-1)  # [B, N, F]
+        # Use center-of-mass-relative coordinates for translation invariance
+        mask_float = atom_mask.unsqueeze(-1).float()  # [B, N, 1]
+        com = (coords * mask_float).sum(dim=1, keepdim=True) / mask_float.sum(dim=1, keepdim=True).clamp_min(1)  # [B, 1, 3]
+        rel_coords = coords - com  # [B, N, 3]
+        x = torch.cat([rel_coords, atom_emb, radii.unsqueeze(-1)], dim=-1)  # [B, N, F]
         h = self.mlp(x) * atom_mask.unsqueeze(-1).to(x.dtype)
         denom = atom_mask.sum(dim=1, keepdim=True).clamp_min(1).to(h.dtype)
         pooled = h.sum(dim=1) / denom
