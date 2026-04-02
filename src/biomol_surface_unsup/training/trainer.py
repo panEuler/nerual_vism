@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 try:
     import torch
     from torch.utils.data import DataLoader
@@ -11,6 +13,7 @@ from biomol_surface_unsup.datasets.collate import collate_fn
 from biomol_surface_unsup.datasets.molecule_dataset import MoleculeDataset
 from biomol_surface_unsup.losses.loss_builder import build_loss_fn
 from biomol_surface_unsup.models.surface_model import SurfaceModel
+from biomol_surface_unsup.training.checkpoint import load_checkpoint, save_checkpoint
 from biomol_surface_unsup.training.loss_scheduler import LossWeightScheduler
 from biomol_surface_unsup.training.optimizer import build_optimizer
 from biomol_surface_unsup.training.train_step import train_step
@@ -30,6 +33,10 @@ class Trainer:
 
         data_cfg = cfg["data"]
         train_cfg = cfg["train"]
+        self.log_every = int(train_cfg.get("log_every", 10))
+        self.save_every = int(train_cfg.get("save_every", 0))
+        self.output_dir = Path(train_cfg.get("output_dir", "outputs/checkpoints"))
+        self.resume_from = train_cfg.get("resume_from")
         self.grad_clip_norm = train_cfg.get("grad_clip_norm")
         batch_size = int(train_cfg.get("batch_size", 1))
         raw_num_samples = data_cfg.get("num_samples")
@@ -75,11 +82,54 @@ class Trainer:
             lr=float(train_cfg.get("lr", 1e-3)),
             weight_decay=float(train_cfg.get("weight_decay", 1e-5)),
         )
+        self.start_epoch = 0
+        self.global_step = 0
+        self.last_metrics = None
+        if self.resume_from:
+            checkpoint = load_checkpoint(
+                self.resume_from,
+                self.model,
+                optimizer=self.optimizer,
+                map_location=self.device,
+            )
+            self.start_epoch = int(checkpoint.get("epoch", -1)) + 1
+            self.global_step = int(checkpoint.get("step", 0))
+            self.last_metrics = checkpoint.get("metrics", {})
+
+    def _checkpoint_path_for_epoch(self, epoch: int) -> Path:
+        return self.output_dir / f"epoch_{epoch:04d}.pt"
+
+    def _save_checkpoint(self, epoch: int, step: int, metrics: dict[str, float]) -> None:
+        epoch_path = self._checkpoint_path_for_epoch(epoch)
+        latest_path = self.output_dir / "latest.pt"
+        save_checkpoint(
+            epoch_path,
+            self.model,
+            optimizer=self.optimizer,
+            epoch=epoch,
+            step=step,
+            metrics=metrics,
+        )
+        save_checkpoint(
+            latest_path,
+            self.model,
+            optimizer=self.optimizer,
+            epoch=epoch,
+            step=step,
+            metrics=metrics,
+        )
 
     def train(self):
         num_epochs = int(self.cfg["train"].get("epochs", 1))
-        for epoch in range(num_epochs):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        best_loss = float('inf')
+
+        for epoch in range(self.start_epoch, num_epochs):
             loss_weights = None if self.loss_weight_scheduler is None else self.loss_weight_scheduler.get_weights(epoch)
+            latest_metrics = None
+            epoch_total_loss = 0.0
+            num_batches = 0
+
             for step, batch in enumerate(self.train_loader):
                 metrics = train_step(
                     self.model,
@@ -90,7 +140,35 @@ class Trainer:
                     loss_weights=loss_weights,
                     grad_clip_norm=self.grad_clip_norm,
                 )
-                print(f"epoch={epoch} step={step} metrics={metrics}")
+                self.global_step += 1
+                latest_metrics = metrics
+                
+                epoch_total_loss += metrics.get("total", 0.0)
+                num_batches += 1
+                
+                if step % self.log_every == 0:
+                    print(f"epoch={epoch} step={step} metrics={metrics}")
+
+            if latest_metrics is not None:
+                self.last_metrics = latest_metrics
+                
+                if num_batches > 0:
+                    avg_loss = epoch_total_loss / num_batches
+                    if avg_loss < best_loss:
+                        best_loss = avg_loss
+                        best_path = self.output_dir / "best_model.pt"
+                        save_checkpoint(
+                            best_path,
+                            self.model,
+                            optimizer=self.optimizer,
+                            epoch=epoch,
+                            step=self.global_step,
+                            metrics=latest_metrics,
+                        )
+                        print(f"[*] Saved new best model at epoch {epoch} with avg loss: {best_loss:.4f}")
+
+                if self.save_every > 0 and ((epoch + 1) % self.save_every == 0 or epoch == num_epochs - 1):
+                    self._save_checkpoint(epoch=epoch, step=self.global_step, metrics=latest_metrics)
 
     def evaluate(self):
         print("TODO")
