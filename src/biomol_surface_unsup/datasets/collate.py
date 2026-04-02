@@ -78,8 +78,6 @@ def collate_fn(batch):
         "sigma": sigma,
         "res_ids": res_ids,
         "atom_mask": atom_mask,
-        "atom_names": [sample["atom_names"] for sample in batch],
-        "res_names": [sample["res_names"] for sample in batch],
         "query_points": query_points,
         "query_group": query_group,
         "query_mask": query_mask,

@@ -77,8 +77,6 @@ def _required_sample_fields(prefix: str) -> dict[str, str]:
         "epsilon": f"{prefix}_epsilon.npy",
         "sigma": f"{prefix}_sigma.npy",
         "res_ids": f"{prefix}_res_ids.npy",
-        "atom_names": f"{prefix}_atom_names.npy",
-        "res_names": f"{prefix}_res_names.npy",
     }
 
 
@@ -183,8 +181,6 @@ class MoleculeDataset(Dataset):
             "epsilon": epsilon,
             "sigma": sigma,
             "res_ids": res_ids,
-            "atom_names": arrays["atom_names"],
-            "res_names": arrays["res_names"],
             "query_points": sampling["query_points"],
             "query_group": sampling["query_group"],
             "containment_points": sampling["containment_points"],
