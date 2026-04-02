@@ -14,3 +14,4 @@ outputs/meshes/*
 !outputs/checkpoints/.gitkeep
 !outputs/metrics/.gitkeep
 !outputs/meshes/.gitkeep
+data/
