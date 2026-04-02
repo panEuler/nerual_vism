@@ -30,6 +30,7 @@ class Trainer:
         if requested_device == "cuda" and not torch.cuda.is_available():
             requested_device = "cpu"
         self.device = requested_device
+        self.num_gpus = torch.cuda.device_count() if self.device == "cuda" else 0
 
         data_cfg = cfg["data"]
         train_cfg = cfg["train"]
@@ -63,6 +64,8 @@ class Trainer:
         self.model = SurfaceModel.from_config(cfg.get("model", {}), num_atom_types=self.train_dataset.num_atom_types).to(
             self.device
         )
+        if self.device == "cuda" and self.num_gpus > 1:
+            self.model = torch.nn.DataParallel(self.model)
         loss_runtime_cfg = dict(cfg)
         loss_runtime_cfg["loss"] = normalize_loss_config(cfg.get("loss", {}))
         self.loss_fn = build_loss_fn(loss_runtime_cfg) # 如何组装的
