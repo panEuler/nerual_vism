@@ -18,6 +18,18 @@ def lj_body_integral(
     dist_eps: float = 1.5,
     potential_clip: float = 100.0,
 ) -> torch.Tensor:
+    """Compute the Lennard-Jones (LJ) body integral over the exterior solvent region.
+
+    Shapes:
+    - pred_sdf: [Q] or [B, Q] (predicted SDF fields for query points)
+    - query_points: [Q, 3] or [B, Q, 3] (3D coordinates of query probes)
+    - coords: [N, 3] or [B, N, 3] (3D coordinates of all atoms)
+    - epsilon_lj: [N] or [B, N] (LJ epsilon parameter per atom)
+    - sigma_lj: [N] or [B, N] (LJ sigma parameter per atom)
+    - atom_mask: [N] or [B, N] (mask for valid atoms in padded batches)
+    - mask: [Q] or [B, Q] or None (mask for valid query points)
+    - returns: [], a single scalar Tensor representing the averaged loss.
+    """
     if pred_sdf.ndim == 1:
         pred_sdf = pred_sdf.unsqueeze(0)
         query_points = query_points.unsqueeze(0)

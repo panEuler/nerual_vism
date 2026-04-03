@@ -40,7 +40,7 @@ class LocalFeatureBuilder(nn.Module):
         self.rbf_centers = nn.Parameter(torch.linspace(0.0, self.cutoff, rbf_dim), requires_grad=False)
         gamma = 1.0 / max(self.cutoff / max(rbf_dim, 1), 1e-6) ** 2
         self.rbf_gamma = float(gamma)
-        self.feature_dim = 3 + 1 + atom_embed_dim + rbf_dim + 1
+        self.feature_dim = 3 + 1 + 3 + atom_embed_dim + rbf_dim + 1
 
     @staticmethod
     def _stable_pairwise_distance(
@@ -57,6 +57,9 @@ class LocalFeatureBuilder(nn.Module):
         atom_types: torch.Tensor,
         radii: torch.Tensor,
         query_points: torch.Tensor,
+        charges: torch.Tensor | None = None,
+        epsilon: torch.Tensor | None = None,
+        sigma: torch.Tensor | None = None,
         atom_mask: torch.Tensor | None = None,
         query_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -65,9 +68,19 @@ class LocalFeatureBuilder(nn.Module):
             coords = coords.unsqueeze(0)
             atom_types = atom_types.unsqueeze(0)
             radii = radii.unsqueeze(0)
+            charges = None if charges is None else charges.unsqueeze(0)
+            epsilon = None if epsilon is None else epsilon.unsqueeze(0)
+            sigma = None if sigma is None else sigma.unsqueeze(0)
             query_points = query_points.unsqueeze(0)
             atom_mask = None if atom_mask is None else atom_mask.unsqueeze(0)
             query_mask = None if query_mask is None else query_mask.unsqueeze(0)
+
+        if charges is None:
+            charges = torch.zeros_like(radii)
+        if epsilon is None:
+            epsilon = torch.zeros_like(radii)
+        if sigma is None:
+            sigma = torch.zeros_like(radii)
 
         batch_size, num_atoms, _ = coords.shape
         _, num_queries, _ = query_points.shape
@@ -111,6 +124,15 @@ class LocalFeatureBuilder(nn.Module):
         gather_radii = radii.unsqueeze(1).expand(-1, num_queries, -1)
         neighbor_radii = torch.gather(gather_radii, 2, sorted_indices).unsqueeze(-1)
 
+        gather_charges = charges.unsqueeze(1).expand(-1, num_queries, -1)
+        neighbor_charges = torch.gather(gather_charges, 2, sorted_indices).unsqueeze(-1)
+
+        gather_epsilon = epsilon.unsqueeze(1).expand(-1, num_queries, -1)
+        neighbor_epsilon = torch.gather(gather_epsilon, 2, sorted_indices).unsqueeze(-1)
+
+        gather_sigma = sigma.unsqueeze(1).expand(-1, num_queries, -1)
+        neighbor_sigma = torch.gather(gather_sigma, 2, sorted_indices).unsqueeze(-1)
+
         gather_atom_types = atom_types.unsqueeze(1).expand(-1, num_queries, -1)
         neighbor_atom_types = torch.gather(gather_atom_types, 2, sorted_indices)
         neighbor_atom_emb = self.atom_embedding(neighbor_atom_types)
@@ -120,7 +142,10 @@ class LocalFeatureBuilder(nn.Module):
         centers = self.rbf_centers.to(query_points.device, query_points.dtype).view(1, 1, 1, -1)
         rbf = torch.exp(-self.rbf_gamma * (rel_dist - centers).pow(2))
 
-        features = torch.cat([rel_pos, neighbor_radii, neighbor_atom_emb, rbf, rel_dist], dim=-1)
+        features = torch.cat(
+            [rel_pos, neighbor_radii, neighbor_charges, neighbor_epsilon, neighbor_sigma, neighbor_atom_emb, rbf, rel_dist],
+            dim=-1,
+        )
         features = features.masked_fill(~neighbor_mask.unsqueeze(-1), 0.0)
         safe_indices = sorted_indices.masked_fill(~neighbor_atom_mask, -1)
         safe_dists = sorted_dists.masked_fill(~neighbor_mask, 0.0)

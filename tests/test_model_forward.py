@@ -86,6 +86,34 @@ def test_surface_model_from_config_builds_schnet_siren_variant():
     assert out["z_global"].shape[-1] == 20
 
 
+def test_surface_model_uses_charge_epsilon_sigma_features():
+    torch.manual_seed(0)
+    dataset = MoleculeDataset(num_samples=1, num_query_points=8)
+    sample = dataset[0]
+    model = SurfaceModel(num_atom_types=dataset.num_atom_types)
+
+    base = model(
+        sample["coords"],
+        sample["atom_types"],
+        sample["radii"],
+        sample["query_points"],
+        charges=sample["charges"],
+        epsilon=sample["epsilon"],
+        sigma=sample["sigma"],
+    )["sdf"]
+    perturbed = model(
+        sample["coords"],
+        sample["atom_types"],
+        sample["radii"],
+        sample["query_points"],
+        charges=sample["charges"] + 1.0,
+        epsilon=sample["epsilon"] + 0.5,
+        sigma=sample["sigma"] + 0.25,
+    )["sdf"]
+
+    assert not torch.allclose(base, perturbed)
+
+
 def test_fourier_encoder_output_dimension():
     encoder = FourierEncoder(d_in=3, n_freq=6)
     x = torch.zeros((2, 5, 3), dtype=torch.float32)

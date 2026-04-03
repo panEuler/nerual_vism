@@ -5,7 +5,12 @@ import torch
 
 def smooth_delta(phi: torch.Tensor, eps: float) -> torch.Tensor:
     eps = max(float(eps), 1e-6)
-    return eps / (torch.pi * (eps**2 + phi**2))
+    x = phi / eps
+    return torch.where(
+        x.abs() <= 1.0,
+        0.5 / eps * (1.0 + torch.cos(torch.pi * x)),
+        torch.zeros_like(phi),
+    )
 
 
 def _safe_query_grads(pred_sdf: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:

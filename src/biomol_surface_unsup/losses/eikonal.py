@@ -11,7 +11,14 @@ def eikonal_loss(
     mask: torch.Tensor | None = None,
     query_grads: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Autograd-based eikonal penalty on masked batched query groups."""
+    """Autograd-based eikonal penalty on masked batched query groups.
+    
+    Shapes:
+    - pred_sdf: [Q] or [B, Q]
+    - mask: same leading shape as pred_sdf or None
+    - query_points: [Q, 3] or [B, Q, 3]
+    
+    """
     if mask is not None and not torch.any(mask):
         return pred_sdf.new_zeros(())
 

@@ -132,17 +132,39 @@ class SurfaceModel(nn.Module):
             fourier_num_frequencies=int(pos_cfg.get("n_freq", cfg.get("fourier_num_frequencies", 6))),
         )
 
-    def forward(self, coords, atom_types, radii, query_points, atom_mask=None, query_mask=None):
+    def forward(
+        self,
+        coords,
+        atom_types,
+        radii,
+        query_points,
+        charges=None,
+        epsilon=None,
+        sigma=None,
+        atom_mask=None,
+        query_mask=None,
+    ):
         local = self.local_builder(
             coords,
             atom_types,
             radii,
             query_points,
+            charges=charges,
+            epsilon=epsilon,
+            sigma=sigma,
             atom_mask=atom_mask,
             query_mask=query_mask,
         )
         z_local = self.local_encoder(local["features"], local["mask"])
-        z_global = self.global_encoder(coords, atom_types, radii, atom_mask=atom_mask)
+        z_global = self.global_encoder(
+            coords,
+            atom_types,
+            radii,
+            charges=charges,
+            epsilon=epsilon,
+            sigma=sigma,
+            atom_mask=atom_mask,
+        )
         if z_local.ndim == 2:
             z_global_expanded = z_global.unsqueeze(0).expand(query_points.shape[0], -1)
         else:

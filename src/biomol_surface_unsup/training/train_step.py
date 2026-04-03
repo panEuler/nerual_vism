@@ -1,3 +1,5 @@
+import inspect
+
 import torch
 
 
@@ -6,6 +8,14 @@ def _has_nonfinite_gradients(model) -> bool:
         if param.grad is not None and not torch.isfinite(param.grad).all():
             return True
     return False
+
+
+def _model_accepts_physics_inputs(model) -> bool:
+    parameters = inspect.signature(model.forward).parameters.values()
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return True
+    names = {param.name for param in parameters}
+    return {"charges", "epsilon", "sigma"}.issubset(names)
 
 
 def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad_clip_norm=None):
@@ -24,14 +34,20 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
     containment_points = batch["containment_points"].to(device)  # [B, C, 3]
     containment_mask = batch["containment_mask"].to(device)  # [B, C]
 
-    out = model(
-        coords,
-        atom_types,
-        radii,
-        query_points,
-        atom_mask=atom_mask,
-        query_mask=query_mask,
-    )
+    model_kwargs = {
+        "atom_mask": atom_mask,
+        "query_mask": query_mask,
+    }
+    if _model_accepts_physics_inputs(model):
+        model_kwargs.update(
+            {
+                "charges": charges,
+                "epsilon": epsilon,
+                "sigma": sigma,
+            }
+        )
+
+    out = model(coords, atom_types, radii, query_points, **model_kwargs)
     losses = loss_fn(
         {
             "coords": coords,
