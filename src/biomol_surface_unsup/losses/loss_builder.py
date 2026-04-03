@@ -7,7 +7,7 @@ from biomol_surface_unsup.datasets.sampling import (
     QUERY_GROUP_GLOBAL,
     QUERY_GROUP_SURFACE_BAND,
 )
-from biomol_surface_unsup.losses.area import area_loss
+from biomol_surface_unsup.losses.area import _safe_query_grads, area_loss
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.eikonal import eikonal_loss
 from biomol_surface_unsup.losses.lj_body import lj_body_integral
@@ -98,8 +98,15 @@ def build_loss_fn(cfg: dict[str, object]):
             for loss_name in SUPPORTED_LOSSES
         }
 
+        query_grads = _safe_query_grads(pred_sdf, query_points)
         losses = {
-            "area": area_loss(pred_sdf, query_points, mask=loss_masks["area"], eps=delta_eps),
+            "area": area_loss(
+                pred_sdf,
+                query_points,
+                mask=loss_masks["area"],
+                eps=delta_eps,
+                query_grads=query_grads,
+            ),
             "pressure_volume": pressure_volume_loss(
                 pred_sdf,
                 mask=loss_masks["pressure_volume"],
@@ -131,7 +138,12 @@ def build_loss_fn(cfg: dict[str, object]):
                 mask=loss_masks["weak_prior"],
                 atom_mask=atom_mask,
             ),
-            "eikonal": eikonal_loss(pred_sdf, query_points, mask=loss_masks["eikonal"]),
+            "eikonal": eikonal_loss(
+                pred_sdf,
+                query_points,
+                mask=loss_masks["eikonal"],
+                query_grads=query_grads,
+            ),
             "containment": containment_loss(
                 pred_sdf,
                 margin=containment_margin,

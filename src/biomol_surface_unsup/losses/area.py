@@ -21,7 +21,6 @@ def _safe_query_grads(pred_sdf: torch.Tensor, query_points: torch.Tensor) -> tor
         inputs=query_points,
         grad_outputs=torch.ones_like(pred_sdf),
         create_graph=True,
-        retain_graph=True,
         only_inputs=True,
         allow_unused=True,
     )[0]
@@ -40,6 +39,7 @@ def area_loss(
     query_points: torch.Tensor,
     mask: torch.Tensor | None = None,
     eps: float = 0.1,
+    query_grads: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Toy surface-area surrogate on masked batched queries.
 
@@ -51,7 +51,7 @@ def area_loss(
     if mask is not None and not torch.any(mask):
         return pred_sdf.new_zeros(())
 
-    grads = _safe_query_grads(pred_sdf, query_points)
+    grads = _safe_query_grads(pred_sdf, query_points) if query_grads is None else query_grads
     integrand = smooth_delta(pred_sdf, eps) * _stable_grad_norm(grads)
     if mask is not None:
         integrand = integrand[mask]

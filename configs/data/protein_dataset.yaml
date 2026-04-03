@@ -3,8 +3,8 @@ root: data/processed
 train_split: train
 val_split: val
 test_split: test
-num_query_points: 1024
-num_samples: None
+num_query_points: 512
+num_samples: null
 bbox_padding: 4.0
 surface_band_width: 0.25
 containment_jitter: 0.15
