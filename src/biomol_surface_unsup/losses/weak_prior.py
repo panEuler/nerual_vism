@@ -4,7 +4,12 @@ import torch
 
 
 def _batched_atomic_union_field(coords: torch.Tensor, radii: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
+    # Compute the Euclidean distances from every spatial query point to every atom's surface boundary.
     pairwise = torch.cdist(query_points, coords) - radii.unsqueeze(-2)
+    
+    # Use LogSumExp to smoothly approximate the mathematical min() function.
+    # In Constructive Solid Geometry (CSG), the union of spheres requires finding the minimum SDF distance.
+    # The smooth-min generates a fully differentiable 'rough prior' mimicking the Van der Waals shape.
     return -torch.logsumexp(-10.0 * pairwise, dim=-1) / 10.0
 
 
@@ -17,6 +22,11 @@ def weak_prior_loss(
     atom_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Toy weak prior against the atomic-union proxy.
+    
+    This acts as a geometric bootstrap. Without it, unsupervised physics losses might 
+    initially trap the network into trivial minimums (e.g., shrinking to an empty vacuum).
+    This loss pulls the initial network shape toward the basic Van der Waals surface,
+    until other fine-grained physics losses dominate and take over.
 
     Batched shapes:
     - coords: [B, N, 3]
@@ -26,6 +36,7 @@ def weak_prior_loss(
     - mask: [B, Q] or None
     - atom_mask: [B, N] or None
     """
+    # Handle single sample tensors by temporarily unsqueezing a pseudo-batch dimension
     squeeze_batch = coords.ndim == 2
     if squeeze_batch:
         coords = coords.unsqueeze(0)
@@ -35,14 +46,23 @@ def weak_prior_loss(
         mask = None if mask is None else mask.unsqueeze(0)
         atom_mask = None if atom_mask is None else atom_mask.unsqueeze(0)
 
+    # Ensure atom masks are present to avoid considering tensor padding zeros as real atomic structural data.
     if atom_mask is None:
         atom_mask = torch.ones(coords.shape[:2], dtype=torch.bool, device=coords.device)
+        
+    # Mask out padded invalid atoms by zeroing out their radius and coordinates.
     safe_radii = radii.masked_fill(~atom_mask, 0.0)
     safe_coords = coords.masked_fill(~atom_mask.unsqueeze(-1), 0.0)
+    
+    # Generate the Ground Truth geometric proxy baseline for supervision.
+    # `.detach()` is crucial here. It stops the gradient graph so this proxy acts strictly as fixed target labels.
     target = _batched_atomic_union_field(safe_coords, safe_radii, query_points).detach()
 
+    # Calculate L1 Loss forcing the network to match the rough VdW target shape.
     if mask is not None:
         if not torch.any(mask):
             return pred_sdf.new_zeros(())
+        # Only compute the mean absolute error on valid, unpadded spatial query points.
         return (pred_sdf[mask] - target[mask]).abs().mean()
+        
     return (pred_sdf - target).abs().mean()

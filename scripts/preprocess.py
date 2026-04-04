@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """
-process.py
+preprocess.py
 ========================
-从 PDB 文件中提取原子级特征：坐标、原子类型、半径、LJ 参数和电荷。
+从 PDB 文件中提取原子级特征:坐标、原子类型、半径、LJ 参数和电荷。
 
 流程:
   1. reduce -Trim:  去除已有氢原子
   2. BioPython:     提取单链（仅标准氨基酸）
   3. PDBFixer:      修补缺失原子、替换非标准残基
-  4. OpenMM Modeller: 重新加氢（AMBER 兼容命名）
+  4. OpenMM Modeller: 重新加氢(AMBER 兼容命名)
   5. OpenMM + AMBER ff14SB: 力场参数化 → 提取 LJ 参数和电荷
 
 用法:

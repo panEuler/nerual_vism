@@ -10,7 +10,7 @@ from biomol_surface_unsup.datasets.sampling import (
 from biomol_surface_unsup.losses.area import _safe_query_grads, area_loss
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.eikonal import eikonal_loss
-from biomol_surface_unsup.losses.lj_body import lj_body_integral
+from biomol_surface_unsup.losses.vdw import lj_body_integral
 from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
 from biomol_surface_unsup.losses.volume import volume_loss
 from biomol_surface_unsup.losses.weak_prior import weak_prior_loss
@@ -60,6 +60,24 @@ def build_loss_fn(cfg: dict[str, object]):
         model_out: dict[str, torch.Tensor],
         loss_weights: dict[str, float] | None = None,
     ) -> dict[str, torch.Tensor]:
+        """Compute and aggregate all configured unsupervised physical losses.
+        
+        Input Shapes:
+        - batch["coords"]: [B, N, 3] (3D coordinates of all atoms)
+        - batch["radii"]: [B, N] (Van der Waals radii per atom)
+        - batch["epsilon"] / ["sigma"]: [B, N] (optional LJ energy parameters)
+        - batch["atom_mask"]: [B, N] (Boolean mask for valid padded atoms)
+        - batch["query_points"]: [B, Q, 3] (3D spatial probes)
+        - batch["query_group"]: [B, Q] (Integer IDs denoting the source/type of each probe)
+        - batch["query_mask"]: [B, Q] (Boolean mask for valid padded probes)
+        
+        - model_out["sdf"]: [B, Q] (Predicted SDF distances corresponding to query_points)
+        
+        Output Shape:
+        - returns: dict[str, torch.Tensor] 
+                   Mapping of string loss names to single 0-dimensional scalar Tensors (shape: []).
+                   Includes individual component losses, debugging counts, and the final combined "total".
+        """
         coords = batch["coords"]  # [B, N, 3]
         radii = batch["radii"]  # [B, N]
         epsilon = batch.get("epsilon")

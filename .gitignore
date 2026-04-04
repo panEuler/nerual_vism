@@ -15,3 +15,10 @@ outputs/meshes/*
 !outputs/metrics/.gitkeep
 !outputs/meshes/.gitkeep
 data/
+AGENTS.md
+claude.md
+CONSTRAINTS.md
+implementation_plan.md
+methodology_evaluation.md
+project_analysis.md
+task.md
