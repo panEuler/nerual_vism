@@ -17,6 +17,8 @@ def eikonal_loss(
     - pred_sdf: [Q] or [B, Q]
     - mask: same leading shape as pred_sdf or None
     - query_points: [Q, 3] or [B, Q, 3]
+    - query_grads: [Q, 3] or [B, Q, 3]
+    
     
     """
     if mask is not None and not torch.any(mask):

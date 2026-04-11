@@ -188,16 +188,3 @@ def build_loss_fn(cfg: dict[str, object]):
         return losses
 
     return loss_fn
-
-
-def build_loss(name: str):
-    if name != "weak_prior":
-        raise ValueError(f"unsupported toy loss: {name}")
-
-    def loss_fn(prediction: dict[str, object], target: dict[str, object]) -> float:
-        pred_sdf = float(prediction.get("sdf", 0.0))
-        values = list(target.get("values", [0.0]))
-        target_value = float(values[0]) if values else 0.0
-        return abs(pred_sdf - target_value)
-
-    return loss_fn
