@@ -20,6 +20,7 @@ def _model_accepts_physics_inputs(model) -> bool:
 
 def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad_clip_norm=None):
     model.train()
+    optimizer.zero_grad(set_to_none=True)
     coords = batch["coords"].to(device)
     atom_types = batch["atom_types"].to(device)
     radii = batch["radii"].to(device)
@@ -47,7 +48,7 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
             }
         )
 
-    out = model(coords, atom_types, radii, query_points, **model_kwargs)
+    out = model(coords, atom_types, radii, query_points, return_aux=False, **model_kwargs)
     losses = loss_fn(
         {
             "coords": coords,
@@ -67,7 +68,6 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
         out,
         loss_weights=loss_weights,
     )
-    optimizer.zero_grad(set_to_none=True)
     if not torch.isfinite(losses["total"]):
         raise ValueError(f"non-finite total loss before backward: {float(losses['total'].detach().cpu())}")
     losses["total"].backward()
@@ -86,4 +86,6 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
     if grad_norm is not None:
         metrics["grad_norm"] = float(grad_norm.detach().cpu())
     metrics.update({f"sampling_{k}": float(v) for k, v in batch.get("sampling_counts", {}).items()})
+
+    del out, losses
     return metrics

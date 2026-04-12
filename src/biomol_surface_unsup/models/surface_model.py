@@ -143,6 +143,7 @@ class SurfaceModel(nn.Module):
         sigma=None,
         atom_mask=None,
         query_mask=None,
+        return_aux=True,
     ):
         local = self.local_builder(
             coords,
@@ -188,4 +189,7 @@ class SurfaceModel(nn.Module):
 
         if query_mask is not None:
             sdf = sdf * query_mask.to(sdf.dtype)
-        return {"sdf": sdf, "z_local": z_local, "z_global": z_global_expanded, "fused": fused, **local}
+        output = {"sdf": sdf}
+        if return_aux:
+            output.update({"z_local": z_local, "z_global": z_global_expanded, "fused": fused, **local})
+        return output
