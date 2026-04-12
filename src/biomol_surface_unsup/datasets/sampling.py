@@ -7,6 +7,8 @@ try:
 except Exception:  # pragma: no cover - fallback when torch is unavailable
     torch = None
 
+from biomol_surface_unsup.utils.pairwise import chunked_atomic_union_sdf
+
 
 QUERY_GROUP_GLOBAL = 0
 QUERY_GROUP_CONTAINMENT = 1
@@ -68,8 +70,7 @@ def approximate_atomic_union_sdf(coords: torch.Tensor, radii: torch.Tensor, quer
     TODO: this is still a toy proxy for the molecular surface. It approximates the
     union-of-spheres field using per-atom Euclidean distance minus atom radius.
     """
-    pairwise_dist = torch.cdist(query_points, coords)  # [Q, N]
-    return (pairwise_dist - radii.unsqueeze(0)).amin(dim=1)  # [Q]
+    return chunked_atomic_union_sdf(coords, radii, query_points)
 
 
 def sample_query_points(

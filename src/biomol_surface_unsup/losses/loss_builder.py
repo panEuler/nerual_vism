@@ -14,6 +14,7 @@ from biomol_surface_unsup.losses.vdw import lj_body_integral
 from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
 from biomol_surface_unsup.losses.volume import volume_loss
 from biomol_surface_unsup.losses.weak_prior import weak_prior_loss
+from biomol_surface_unsup.utils.pairwise import chunked_smooth_atomic_union_field
 from biomol_surface_unsup.utils.config import normalize_loss_config
 
 
@@ -27,8 +28,7 @@ SUPPORTED_LOSSES = ("containment", "weak_prior", "area", "pressure_volume", "lj_
 
 
 def _batched_atomic_union_field(coords: torch.Tensor, radii: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
-    pairwise = torch.cdist(query_points, coords) - radii.unsqueeze(-2)
-    return -torch.logsumexp(-10.0 * pairwise, dim=-1) / 10.0
+    return chunked_smooth_atomic_union_field(coords, radii, query_points)
 
 
 def _masked_count(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:

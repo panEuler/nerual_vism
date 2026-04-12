@@ -37,6 +37,7 @@ class LocalFeatureBuilder(nn.Module):
         self.atom_embedding = AtomFeatureEmbedding(num_atom_types, atom_embed_dim)
         self.cutoff = float(cutoff)
         self.max_neighbors = int(max_neighbors)
+        self.distance_query_chunk_size = 128
         self.rbf_centers = nn.Parameter(torch.linspace(0.0, self.cutoff, rbf_dim), requires_grad=False)
         gamma = 1.0 / max(self.cutoff / max(rbf_dim, 1), 1e-6) ** 2
         self.rbf_gamma = float(gamma)
@@ -108,9 +109,18 @@ class LocalFeatureBuilder(nn.Module):
                 return {k_: v.squeeze(0) for k_, v in result.items()}
             return result
 
-        dists = self._stable_pairwise_distance(query_points, coords)  # [B, Q, N]
-        masked_dists = dists.masked_fill(~atom_mask.unsqueeze(1), float("inf"))
-        sorted_dists, sorted_indices = torch.topk(masked_dists, k=k, dim=-1, largest=False)
+        distance_chunks = []
+        index_chunks = []
+        for start in range(0, num_queries, self.distance_query_chunk_size):
+            end = min(start + self.distance_query_chunk_size, num_queries)
+            query_chunk = query_points[:, start:end]
+            dists = self._stable_pairwise_distance(query_chunk, coords)  # [B, Qc, N]
+            masked_dists = dists.masked_fill(~atom_mask.unsqueeze(1), float("inf"))
+            chunk_dists, chunk_indices = torch.topk(masked_dists, k=k, dim=-1, largest=False)
+            distance_chunks.append(chunk_dists)
+            index_chunks.append(chunk_indices)
+        sorted_dists = torch.cat(distance_chunks, dim=1)
+        sorted_indices = torch.cat(index_chunks, dim=1)
 
         neighbor_atom_mask = torch.gather(
             atom_mask.unsqueeze(1).expand(-1, num_queries, -1),

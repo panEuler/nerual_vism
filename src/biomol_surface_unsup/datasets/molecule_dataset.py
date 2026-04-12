@@ -175,11 +175,22 @@ class MoleculeDataset(Dataset):
 
         train_end = split_counts["train"]
         val_end = train_end + split_counts["val"]
-        return {
+        split_dict = {
             "train": shuffled_dirs[:train_end],
             "val": shuffled_dirs[train_end:val_end],
             "test": shuffled_dirs[val_end:],
         }
+        
+        # Save split info to files so it doesn't partition again on subsequent runs
+        try:
+            for split_name, dirs in split_dict.items():
+                split_file = self.root / f"{split_name}.txt"
+                if not split_file.exists():
+                    split_file.write_text("\n".join(d.name for d in dirs) + "\n", encoding="utf-8")
+        except OSError:
+            pass  # Fail gracefully if root is read-only
+
+        return split_dict
 
     def _materialize_split_dirs(self, split_dirs: dict[str, list[Path]]) -> list[Path]:
         split_root = self.root.parent / self.split

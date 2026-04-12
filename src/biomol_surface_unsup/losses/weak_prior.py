@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import torch
 
+from biomol_surface_unsup.utils.pairwise import chunked_smooth_atomic_union_field
+
 
 def _batched_atomic_union_field(coords: torch.Tensor, radii: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
-    # Compute the Euclidean distances from every spatial query point to every atom's surface boundary.
-    pairwise = torch.cdist(query_points, coords) - radii.unsqueeze(-2)
-    
-    # Use LogSumExp to smoothly approximate the mathematical min() function.
-    # In Constructive Solid Geometry (CSG), the union of spheres requires finding the minimum SDF distance.
-    # The smooth-min generates a fully differentiable 'rough prior' mimicking the Van der Waals shape.
-    return -torch.logsumexp(-10.0 * pairwise, dim=-1) / 10.0
+    return chunked_smooth_atomic_union_field(coords, radii, query_points)
 
 
 def weak_prior_loss(

@@ -134,6 +134,16 @@ class Trainer:
             "containment_counts": [int(count) for count in containment_counts],
         }
 
+    def _device_memory_summary(self) -> dict[str, float]:
+        if self.device != "cuda" or torch is None or not torch.cuda.is_available():
+            return {}
+        return {
+            "cuda_allocated_gb": round(torch.cuda.memory_allocated() / (1024 ** 3), 3),
+            "cuda_reserved_gb": round(torch.cuda.memory_reserved() / (1024 ** 3), 3),
+            "cuda_max_allocated_gb": round(torch.cuda.max_memory_allocated() / (1024 ** 3), 3),
+            "cuda_max_reserved_gb": round(torch.cuda.max_memory_reserved() / (1024 ** 3), 3),
+        }
+
     def train(self):
         num_epochs = int(self.cfg["train"].get("epochs", 1))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -170,7 +180,11 @@ class Trainer:
                 num_batches += 1
                 
                 if step % self.log_every == 0:
-                    print(f"epoch={epoch} step={step} batch={batch_summary} metrics={metrics}")
+                    memory_summary = self._device_memory_summary()
+                    print(
+                        f"epoch={epoch} step={step} batch={batch_summary} "
+                        f"memory={memory_summary} metrics={metrics}"
+                    )
 
             if latest_metrics is not None:
                 self.last_metrics = latest_metrics

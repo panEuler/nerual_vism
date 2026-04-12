@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import torch
 
+from biomol_surface_unsup.utils.pairwise import chunked_lj_potential_sum
+
 from .volume import smooth_heaviside
 
 
@@ -40,21 +42,17 @@ def lj_body_integral(
         atom_mask = atom_mask.unsqueeze(0)
         mask = None if mask is None else mask.unsqueeze(0)
 
-    # 1. Compute pairwise distances between space probes and atom centers.
-    # Clip the minimum distance to 'dist_eps' to prevent division-by-zero singularities.
-    dists = torch.cdist(query_points, coords).clamp_min(float(dist_eps))
-    
-    # 2. Compute the (sigma / r)^6 term for standard L-J 12-6 potential.
-    sigma_r6 = (sigma_lj.unsqueeze(1) / dists).pow(6)
-    
-    # 3. Compute the full L-J potential: V(r) = 4 * epsilon * ((sigma/r)^12 - (sigma/r)^6)
-    potential = 4.0 * epsilon_lj.unsqueeze(1) * (sigma_r6.pow(2) - sigma_r6)
-    
-    # Clip extreme positive/negative potentials to avoid exploding gradients.
-    potential = potential.clamp(min=-float(potential_clip), max=float(potential_clip))
-    
-    # 4. Sum the potential contributions from all valid atoms for each spatial probe.
-    lj_energy = (potential * atom_mask.unsqueeze(1).to(potential.dtype)).sum(dim=-1)
+    # Compute the per-query solvent interaction energy in chunks so large
+    # proteins do not allocate a full [B, Q, N] distance matrix at once.
+    lj_energy = chunked_lj_potential_sum(
+        query_points,
+        coords,
+        epsilon_lj,
+        sigma_lj,
+        atom_mask,
+        dist_eps=dist_eps,
+        potential_clip=potential_clip,
+    )
     
     # 5. Extract the exterior solvent region mask using a smooth Heaviside step function.
     # (Inside protein: SDF < 0 -> 0; Outside protein: SDF > 0 -> 1)
