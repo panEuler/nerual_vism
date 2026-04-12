@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,14 @@ ATOM_TYPE_TO_ID = {
     "ZN": 14,
     "FE": 15,
 }
+
+_AUTO_SPLIT_RATIOS = {
+    "train": 0.8,
+    "val": 0.1,
+    "test": 0.1,
+}
+_AUTO_SPLIT_ORDER = ("train", "val", "test")
+_DEFAULT_SPLIT_SEED = 42
 
 
 @dataclass(frozen=True)
@@ -106,10 +116,12 @@ class MoleculeDataset(Dataset):
         bbox_padding: float = 4.0,
         containment_jitter: float = 0.15,
         surface_band_width: float = 0.25,
+        split_seed: int = _DEFAULT_SPLIT_SEED,
     ) -> None:
         del num_atoms  # Real processed samples determine atom count from disk.
         self.root = Path(root)
         self.split = split
+        self.split_seed = int(split_seed)
         self.num_query_points = int(num_query_points)
         self.bbox_padding = float(bbox_padding)
         self.containment_jitter = float(containment_jitter)
@@ -133,6 +145,7 @@ class MoleculeDataset(Dataset):
             sample_dirs = [self.root]
         else:
             sample_dirs = sorted(path for path in self.root.iterdir() if path.is_dir())
+            sample_dirs = self._select_split_dirs(sample_dirs)
 
         records: list[MoleculeRecord] = []
         for sample_dir in sample_dirs:
@@ -143,6 +156,68 @@ class MoleculeDataset(Dataset):
                 raise FileNotFoundError(f"sample {sample_dir.name} is missing required fields: {', '.join(missing)}")
             records.append(MoleculeRecord(sample_id=sample_dir.name, directory=sample_dir, prefix=prefix))
         return records
+
+    def _select_split_dirs(self, sample_dirs: list[Path]) -> list[Path]:
+        if self.split not in _AUTO_SPLIT_RATIOS or len(sample_dirs) <= 1:
+            return sample_dirs
+        if self.root.name == self.split:
+            return sample_dirs
+
+        split_dirs = self._partition_sample_dirs(sample_dirs)
+        if self.root.name == "processed":
+            return self._materialize_split_dirs(split_dirs)
+        return split_dirs[self.split]
+
+    def _partition_sample_dirs(self, sample_dirs: list[Path]) -> dict[str, list[Path]]:
+        rng = np.random.default_rng(self.split_seed)
+        shuffled_dirs = [sample_dirs[idx] for idx in rng.permutation(len(sample_dirs))]
+        split_counts = self._compute_split_counts(len(shuffled_dirs))
+
+        train_end = split_counts["train"]
+        val_end = train_end + split_counts["val"]
+        return {
+            "train": shuffled_dirs[:train_end],
+            "val": shuffled_dirs[train_end:val_end],
+            "test": shuffled_dirs[val_end:],
+        }
+
+    def _materialize_split_dirs(self, split_dirs: dict[str, list[Path]]) -> list[Path]:
+        split_root = self.root.parent / self.split
+        split_root.mkdir(parents=True, exist_ok=True)
+
+        for split_name, source_dirs in split_dirs.items():
+            current_split_root = self.root.parent / split_name
+            current_split_root.mkdir(parents=True, exist_ok=True)
+            for source_dir in source_dirs:
+                link_dir = current_split_root / source_dir.name
+                if link_dir.is_symlink():
+                    if link_dir.resolve() == source_dir.resolve():
+                        continue
+                    link_dir.unlink()
+                elif link_dir.exists():
+                    continue
+                os.symlink(source_dir.resolve(), link_dir, target_is_directory=True)
+
+        return [split_root / source_dir.name for source_dir in split_dirs[self.split]]
+
+    def _compute_split_counts(self, num_samples: int) -> dict[str, int]:
+        desired_counts = {
+            split_name: num_samples * split_ratio for split_name, split_ratio in _AUTO_SPLIT_RATIOS.items()
+        }
+        split_counts = {
+            split_name: math.floor(desired_count) for split_name, desired_count in desired_counts.items()
+        }
+
+        remaining = num_samples - sum(split_counts.values())
+        if remaining > 0:
+            split_priority = sorted(
+                _AUTO_SPLIT_ORDER,
+                key=lambda split_name: (desired_counts[split_name] - split_counts[split_name]),
+                reverse=True,
+            )
+            for split_name in split_priority[:remaining]:
+                split_counts[split_name] += 1
+        return split_counts
 
     def __len__(self) -> int:
         return len(self.records)

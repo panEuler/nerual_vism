@@ -59,7 +59,7 @@ def test_collate_fn_pads_atoms_and_queries_without_dropping_samples(tmp_path: Pa
     dataset = MoleculeDataset(root=str(tmp_path), num_query_points=8)
     batch = collate_fn([dataset[0], dataset[1]])
 
-    assert batch["id"] == ["1ABC_TEST", "2XYZ_TEST"]
+    assert set(batch["id"]) == {"1ABC_TEST", "2XYZ_TEST"}
     assert tuple(batch["coords"].shape) == (2, 4, 3)
     assert tuple(batch["atom_types"].shape) == (2, 4)
     assert tuple(batch["radii"].shape) == (2, 4)
@@ -71,8 +71,47 @@ def test_collate_fn_pads_atoms_and_queries_without_dropping_samples(tmp_path: Pa
     assert tuple(batch["query_points"].shape) == (2, 8, 3)
     assert tuple(batch["query_group"].shape) == (2, 8)
     assert tuple(batch["query_mask"].shape) == (2, 8)
-    assert batch["atom_mask"][0].sum().item() == 4
-    assert batch["atom_mask"][1].sum().item() == 3
-    assert batch["query_mask"][0].sum().item() == 8
-    assert batch["query_mask"][1].sum().item() == 8
+    batch_index_by_id = {sample_id: idx for idx, sample_id in enumerate(batch["id"])}
+    assert batch["atom_mask"][batch_index_by_id["1ABC_TEST"]].sum().item() == 4
+    assert batch["atom_mask"][batch_index_by_id["2XYZ_TEST"]].sum().item() == 3
+    assert batch["query_mask"][batch_index_by_id["1ABC_TEST"]].sum().item() == 8
+    assert batch["query_mask"][batch_index_by_id["2XYZ_TEST"]].sum().item() == 8
     assert batch["sampling_counts"] == {"global": 8, "containment": 4, "surface_band": 4}
+
+
+def test_dataset_auto_split_is_deterministic_with_train_val_test_ratio(tmp_path: Path) -> None:
+    processed_root = tmp_path / "data" / "processed"
+    for idx in range(10):
+        sample_id = f"{idx:02d}ABC_CHAIN"
+        _write_processed_sample(processed_root / sample_id, f"{sample_id}_A", num_atoms=4)
+
+    train_dataset = MoleculeDataset(root=str(processed_root), split="train", num_query_points=8)
+    val_dataset = MoleculeDataset(root=str(processed_root), split="val", num_query_points=8)
+    test_dataset = MoleculeDataset(root=str(processed_root), split="test", num_query_points=8)
+    train_dataset_again = MoleculeDataset(root=str(processed_root), split="train", num_query_points=8)
+    val_dataset_again = MoleculeDataset(root=str(processed_root), split="val", num_query_points=8)
+    test_dataset_again = MoleculeDataset(root=str(processed_root), split="test", num_query_points=8)
+
+    train_ids = [record.sample_id for record in train_dataset.records]
+    val_ids = [record.sample_id for record in val_dataset.records]
+    test_ids = [record.sample_id for record in test_dataset.records]
+
+    assert len(train_ids) == 8
+    assert len(val_ids) == 1
+    assert len(test_ids) == 1
+    assert (processed_root.parent / "train").is_dir()
+    assert (processed_root.parent / "val").is_dir()
+    assert (processed_root.parent / "test").is_dir()
+    assert all(record.directory.parent == processed_root.parent / "train" for record in train_dataset.records)
+    assert all(record.directory.parent == processed_root.parent / "val" for record in val_dataset.records)
+    assert all(record.directory.parent == processed_root.parent / "test" for record in test_dataset.records)
+    assert all(record.directory.is_symlink() for record in train_dataset.records)
+    assert all(record.directory.is_symlink() for record in val_dataset.records)
+    assert all(record.directory.is_symlink() for record in test_dataset.records)
+    assert set(train_ids).isdisjoint(val_ids)
+    assert set(train_ids).isdisjoint(test_ids)
+    assert set(val_ids).isdisjoint(test_ids)
+    assert set(train_ids) | set(val_ids) | set(test_ids) == {f"{idx:02d}ABC_CHAIN" for idx in range(10)}
+    assert train_ids == [record.sample_id for record in train_dataset_again.records]
+    assert val_ids == [record.sample_id for record in val_dataset_again.records]
+    assert test_ids == [record.sample_id for record in test_dataset_again.records]

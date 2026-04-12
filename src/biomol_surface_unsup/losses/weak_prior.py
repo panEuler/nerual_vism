@@ -56,7 +56,8 @@ def weak_prior_loss(
     
     # Generate the Ground Truth geometric proxy baseline for supervision.
     # `.detach()` is crucial here. It stops the gradient graph so this proxy acts strictly as fixed target labels.
-    target = _batched_atomic_union_field(safe_coords, safe_radii, query_points).detach()
+    with torch.no_grad():
+        target = _batched_atomic_union_field(safe_coords, safe_radii, query_points)
 
     # Calculate L1 Loss forcing the network to match the rough VdW target shape.
     if mask is not None:

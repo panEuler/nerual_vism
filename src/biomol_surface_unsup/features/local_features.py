@@ -48,8 +48,10 @@ class LocalFeatureBuilder(nn.Module):
         coords: torch.Tensor,
         eps: float = 1e-12,
     ) -> torch.Tensor:
-        diff = query_points.unsqueeze(2) - coords.unsqueeze(1)
-        return torch.sqrt(diff.pow(2).sum(dim=-1) + float(eps))
+        # `torch.cdist` avoids materializing the much larger [B, Q, N, 3]
+        # broadcasted difference tensor, which can otherwise spike memory on
+        # large proteins and get the training process killed by the OS.
+        return torch.cdist(query_points, coords).clamp_min(float(eps))
 
     def forward(
         self,

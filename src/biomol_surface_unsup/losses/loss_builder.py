@@ -170,7 +170,8 @@ def build_loss_fn(cfg: dict[str, object]):
         }
         safe_coords = coords.masked_fill(~atom_mask.unsqueeze(-1), 0.0)
         safe_radii = radii.masked_fill(~atom_mask, 0.0)
-        target_sdf = _batched_atomic_union_field(safe_coords, safe_radii, query_points).detach()
+        with torch.no_grad():
+            target_sdf = _batched_atomic_union_field(safe_coords, safe_radii, query_points)
         losses["target_sdf"] = target_sdf[query_mask].mean() if torch.any(query_mask) else pred_sdf.new_zeros(())
         losses["global_count"] = _masked_count(base_masks["global"], pred_sdf.dtype)
         losses["containment_count"] = _masked_count(base_masks["containment"], pred_sdf.dtype)

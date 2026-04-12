@@ -122,6 +122,18 @@ class Trainer:
             metrics=metrics,
         )
 
+    @staticmethod
+    def _batch_debug_summary(batch: dict) -> dict[str, object]:
+        atom_counts = batch["atom_mask"].sum(dim=1).tolist()
+        query_counts = batch["query_mask"].sum(dim=1).tolist()
+        containment_counts = batch["containment_mask"].sum(dim=1).tolist()
+        return {
+            "ids": batch["id"],
+            "atom_counts": [int(count) for count in atom_counts],
+            "query_counts": [int(count) for count in query_counts],
+            "containment_counts": [int(count) for count in containment_counts],
+        }
+
     def train(self):
         num_epochs = int(self.cfg["train"].get("epochs", 1))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -134,15 +146,23 @@ class Trainer:
             num_batches = 0
 
             for step, batch in enumerate(self.train_loader):
-                metrics = train_step(
-                    self.model,
-                    batch,
-                    self.loss_fn,
-                    self.optimizer,
-                    self.device,
-                    loss_weights=loss_weights,
-                    grad_clip_norm=self.grad_clip_norm,
-                )
+                batch_summary = self._batch_debug_summary(batch)
+                try:
+                    metrics = train_step(
+                        self.model,
+                        batch,
+                        self.loss_fn,
+                        self.optimizer,
+                        self.device,
+                        loss_weights=loss_weights,
+                        grad_clip_norm=self.grad_clip_norm,
+                    )
+                except RuntimeError as exc:
+                    print(
+                        f"[!] Training failed at epoch={epoch} step={step} "
+                        f"batch={batch_summary} error={exc}"
+                    )
+                    raise
                 self.global_step += 1
                 latest_metrics = metrics
                 
@@ -150,7 +170,7 @@ class Trainer:
                 num_batches += 1
                 
                 if step % self.log_every == 0:
-                    print(f"epoch={epoch} step={step} metrics={metrics}")
+                    print(f"epoch={epoch} step={step} batch={batch_summary} metrics={metrics}")
 
             if latest_metrics is not None:
                 self.last_metrics = latest_metrics

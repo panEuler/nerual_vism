@@ -67,7 +67,7 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
         out,
         loss_weights=loss_weights,
     )
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     if not torch.isfinite(losses["total"]):
         raise ValueError(f"non-finite total loss before backward: {float(losses['total'].detach().cpu())}")
     losses["total"].backward()
