@@ -1,5 +1,8 @@
 import argparse
+
 import yaml
+
+
 DEFAULT_LOSS_WEIGHTS = {
     "area": 1.0,
     "volume": 0.0,
@@ -9,9 +12,13 @@ DEFAULT_LOSS_WEIGHTS = {
     "eikonal": 0.5,
     "lj": 0.0,
 }
+
+
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
 def _apply_loss_defaults(loss_cfg):
     merged = dict(loss_cfg or {})
     merged.setdefault("lambda_area", DEFAULT_LOSS_WEIGHTS["area"])
@@ -22,6 +29,8 @@ def _apply_loss_defaults(loss_cfg):
     merged.setdefault("lambda_eikonal", DEFAULT_LOSS_WEIGHTS["eikonal"])
     merged.setdefault("lambda_lj", DEFAULT_LOSS_WEIGHTS["lj"])
     return merged
+
+
 def load_experiment_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
@@ -35,28 +44,14 @@ def load_experiment_config():
         "loss": loss_cfg,
         "train": load_yaml(exp["train"]["config"]),
     }
+
+
 def load_eval_config():
     return load_experiment_config()
+
+
 def load_infer_config():
-    """Parse CLI arguments for the inference script.
-    Accepted arguments
-    ------------------
-    --ckpt   : path to a saved checkpoint (.pt file). Required.
-    --config : path to the experiment YAML that was used for training. Required.
-    --split  : dataset split to run inference on (default: "test").
-    --spacing_angstrom : target physical grid spacing in Å (default: 0.1).
-    --resolution : legacy fallback grid resolution per axis.
-    --output_dir : directory for mesh / slice outputs (default: outputs/meshes).
-    --batch_size : number of query points per forward pass (default: 8192).
-    --no_mesh : skip mesh extraction (only predict SDF).
-    --no_slices : skip SDF slice visualization.
-    --device : force device ("cpu" or "cuda"). Auto-detects if omitted.
-    --num_samples : max number of molecules to process (default: all).
-    Returns
-    -------
-    dict with keys: "experiment", "data", "model", "loss", "train", "infer"
-    where "infer" contains the inference-specific settings.
-    """
+    """Parse CLI arguments for the inference script."""
     parser = argparse.ArgumentParser(description="Neural-VISM inference / mesh extraction")
     parser.add_argument("--ckpt", type=str, required=True, help="Checkpoint path (.pt)")
     parser.add_argument(
@@ -117,10 +112,35 @@ def load_infer_config():
         default=None,
         help="Max number of molecules to process (default: all in split)",
     )
+    parser.add_argument(
+        "--processed_sample_dir",
+        type=str,
+        default=None,
+        help="Path to one processed sample directory for single-protein inference",
+    )
+    parser.add_argument(
+        "--pdb_file",
+        type=str,
+        default=None,
+        help="Path to one raw PDB file for single-protein inference",
+    )
+    parser.add_argument(
+        "--chain_id",
+        type=str,
+        default=None,
+        help="Chain ID used together with --pdb_file for single-protein inference",
+    )
+    parser.add_argument(
+        "--preprocess_dir",
+        type=str,
+        default="outputs/infer_processed",
+        help="Directory used to store temporary processed files for single-protein inference",
+    )
+
     args = parser.parse_args()
     exp = load_yaml(args.config)
     loss_cfg = _apply_loss_defaults(load_yaml(exp["loss"]["config"]))
-    cfg = {
+    return {
         "experiment": exp,
         "data": load_yaml(exp["data"]["config"]),
         "model": load_yaml(exp["model"]["config"]),
@@ -137,7 +157,9 @@ def load_infer_config():
             "plot_slices": not args.no_slices,
             "device": args.device,
             "num_samples": args.num_samples,
-            "sample_id": args.sample_id,
+            "processed_sample_dir": args.processed_sample_dir,
+            "pdb_file": args.pdb_file,
+            "chain_id": args.chain_id,
+            "preprocess_dir": args.preprocess_dir,
         },
     }
-    return cfg
