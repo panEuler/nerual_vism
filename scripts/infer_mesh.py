@@ -211,9 +211,14 @@ def main() -> None:
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     raw_ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     # Support multiple checkpoint formats:
-    #   1) {"model_state_dict": ..., "epoch": ...}  (standard trainer format)
-    #   2) raw state_dict
-    if isinstance(raw_ckpt, dict) and "model_state_dict" in raw_ckpt:
+    #   1) {"model": ..., "epoch": ..., ...} saved by training/checkpoint.py
+    #   2) {"model_state_dict": ..., "epoch": ...}
+    #   3) raw state_dict
+    if isinstance(raw_ckpt, dict) and "model" in raw_ckpt:
+        state_dict = raw_ckpt["model"]
+        saved_epoch = raw_ckpt.get("epoch", "?")
+        print(f"[infer_mesh] loaded training checkpoint from epoch {saved_epoch}: {ckpt_path}")
+    elif isinstance(raw_ckpt, dict) and "model_state_dict" in raw_ckpt:
         state_dict = raw_ckpt["model_state_dict"]
         saved_epoch = raw_ckpt.get("epoch", "?")
         print(f"[infer_mesh] loaded checkpoint from epoch {saved_epoch}: {ckpt_path}")

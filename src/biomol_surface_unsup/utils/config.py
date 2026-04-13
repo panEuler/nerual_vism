@@ -1,9 +1,3 @@
-
-config.py
-src/biomol_surface_unsup/utils
-
-
-
 import argparse
 import yaml
 DEFAULT_LOSS_WEIGHTS = {
@@ -123,30 +117,6 @@ def load_infer_config():
         default=None,
         help="Max number of molecules to process (default: all in split)",
     )
-    parser.add_argument(
-        "--processed_sample_dir",
-        type=str,
-        default=None,
-        help="Path to one processed sample directory for single-protein inference",
-    )
-    parser.add_argument(
-        "--pdb_file",
-        type=str,
-        default=None,
-        help="Path to one raw PDB file for single-protein inference",
-    )
-    parser.add_argument(
-        "--chain_id",
-        type=str,
-        default=None,
-        help="Chain ID used together with --pdb_file for single-protein inference",
-    )
-    parser.add_argument(
-        "--preprocess_dir",
-        type=str,
-        default="outputs/infer_processed",
-        help="Directory used to store temporary processed files for single-protein inference",
-    )
     args = parser.parse_args()
     exp = load_yaml(args.config)
     loss_cfg = _apply_loss_defaults(load_yaml(exp["loss"]["config"]))
@@ -167,10 +137,7 @@ def load_infer_config():
             "plot_slices": not args.no_slices,
             "device": args.device,
             "num_samples": args.num_samples,
-            "processed_sample_dir": args.processed_sample_dir,
-            "pdb_file": args.pdb_file,
-            "chain_id": args.chain_id,
-            "preprocess_dir": args.preprocess_dir,
+            "sample_id": args.sample_id,
         },
     }
     return cfg
