@@ -9,6 +9,7 @@ from biomol_surface_unsup.datasets.sampling import (
     QUERY_GROUP_CONTAINMENT,
     QUERY_GROUP_GLOBAL,
     QUERY_GROUP_SURFACE_BAND,
+    _infer_bond_pairs,
     approximate_atomic_union_sdf,
     sample_query_points,
 )
@@ -57,3 +58,19 @@ def test_containment_points_cover_interstitial_regions_inside_atomic_union() -> 
 
     assert containment_points.shape[0] == sampling["sampling_counts"]["containment"]
     assert torch.all(containment_sdf <= 0.0)
+
+
+def test_infer_bond_pairs_avoids_dense_all_pairs_materialization_behaviorally() -> None:
+    coords = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.2, 0.0, 0.0], [2.4, 0.0, 0.0], [8.0, 0.0, 0.0]],
+        dtype=torch.float32,
+    )
+    radii = torch.tensor([0.8, 0.8, 0.8, 0.8], dtype=torch.float32)
+
+    pairs = _infer_bond_pairs(coords, radii, max_neighbors=2, chunk_size=2)
+
+    pair_set = {tuple(pair.tolist()) for pair in pairs}
+    assert (0, 1) in pair_set
+    assert (1, 2) in pair_set
+    assert (0, 3) not in pair_set
+    assert all(i < j for i, j in pair_set)

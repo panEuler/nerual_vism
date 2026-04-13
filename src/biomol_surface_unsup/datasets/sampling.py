@@ -15,14 +15,45 @@ QUERY_GROUP_CONTAINMENT = 1
 QUERY_GROUP_SURFACE_BAND = 2
 
 
-def _infer_bond_pairs(coords: torch.Tensor, radii: torch.Tensor) -> torch.Tensor:
+def _infer_bond_pairs(
+    coords: torch.Tensor,
+    radii: torch.Tensor,
+    max_neighbors: int = 8,
+    chunk_size: int = 256,
+) -> torch.Tensor:
     if coords.shape[0] < 2:
         return torch.empty((0, 2), dtype=torch.long, device=coords.device)
-    pair_index = torch.triu_indices(coords.shape[0], coords.shape[0], offset=1, device=coords.device)
-    pair_dist = (coords[pair_index[0]] - coords[pair_index[1]]).norm(dim=-1)
-    pair_cutoff = radii[pair_index[0]] + radii[pair_index[1]] + 0.5
-    pair_mask = pair_dist <= pair_cutoff
-    return pair_index[:, pair_mask].transpose(0, 1)
+
+    neighbor_k = min(max(1, int(max_neighbors)), coords.shape[0] - 1)
+    pair_chunks: list[torch.Tensor] = []
+
+    for start in range(0, coords.shape[0], max(1, int(chunk_size))):
+        end = min(start + max(1, int(chunk_size)), coords.shape[0])
+        coord_chunk = coords[start:end]
+        dist_chunk = torch.cdist(coord_chunk, coords)
+
+        row_indices = torch.arange(start, end, device=coords.device)
+        dist_chunk[torch.arange(end - start, device=coords.device), row_indices] = float("inf")
+
+        cutoff_chunk = radii[start:end].unsqueeze(1) + radii.unsqueeze(0) + 0.5
+        dist_chunk = dist_chunk.masked_fill(dist_chunk > cutoff_chunk, float("inf"))
+
+        chunk_dists, chunk_indices = torch.topk(dist_chunk, k=neighbor_k, dim=-1, largest=False)
+        valid = torch.isfinite(chunk_dists)
+        if not torch.any(valid):
+            continue
+
+        chunk_rows = row_indices.unsqueeze(1).expand_as(chunk_indices)
+        pair_rows = chunk_rows[valid]
+        pair_cols = chunk_indices[valid]
+        pair_first = torch.minimum(pair_rows, pair_cols)
+        pair_second = torch.maximum(pair_rows, pair_cols)
+        pair_chunks.append(torch.stack([pair_first, pair_second], dim=1))
+
+    if not pair_chunks:
+        return torch.empty((0, 2), dtype=torch.long, device=coords.device)
+
+    return torch.unique(torch.cat(pair_chunks, dim=0), dim=0)
 
 
 def _sample_convex_hull_interior(
