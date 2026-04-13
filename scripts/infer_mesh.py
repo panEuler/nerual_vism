@@ -4,7 +4,7 @@ Usage (from project root)
 python scripts/infer_mesh.py \\
     --ckpt  outputs/checkpoints/latest.pt \\
     --config configs/experiment/real_schnet_debug.yaml \\
-    --split test \\
+    --processed_sample_dir /path/to/processed/sample \\
     --spacing_angstrom 0.1 \\
     --output_dir outputs/meshes
 Optional flags
@@ -22,7 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 import torch
-from biomol_surface_unsup.datasets.molecule_dataset import MoleculeDataset
+from biomol_surface_unsup.datasets.molecule_dataset import ATOM_TYPE_TO_ID, MoleculeDataset
+from biomol_surface_unsup.inference import load_processed_molecule
 from biomol_surface_unsup.models.surface_model import SurfaceModel
 from biomol_surface_unsup.utils.config import load_infer_config
 from biomol_surface_unsup.visualization.export_mesh import export_mesh
@@ -106,6 +107,25 @@ def _predict_sdf(
             out = model(coords, atom_types, radii, batch_q)
         results.append(out["sdf"].squeeze(-1).cpu().numpy())
     return np.concatenate(results, axis=0)
+
+
+def _resolve_single_sample_dir(infer_cfg: dict[str, object]) -> Path | None:
+    processed_sample_dir = infer_cfg.get("processed_sample_dir")
+    if processed_sample_dir:
+        return Path(str(processed_sample_dir))
+
+    pdb_file = infer_cfg.get("pdb_file")
+    chain_id = infer_cfg.get("chain_id")
+    if not pdb_file:
+        return None
+    if not chain_id:
+        raise ValueError("provide --chain_id together with --pdb_file for single-protein inference")
+
+    from preprocess import process_one_pdb
+
+    preprocess_dir = Path(str(infer_cfg.get("preprocess_dir", "outputs/infer_processed")))
+    process_one_pdb(str(pdb_file), str(chain_id), str(preprocess_dir))
+    return preprocess_dir / Path(str(pdb_file)).stem
 # ────────────────────────────────────────────────────────────────────────────
 # Helper: marching cubes with graceful fallback
 # ────────────────────────────────────────────────────────────────────────────
@@ -150,23 +170,40 @@ def main() -> None:
     else:
         device = torch.device("cpu")
     print(f"[infer_mesh] using device: {device}")
-    # ── dataset ─────────────────────────────────────────────────────────────
-    split = infer_cfg["split"]
-    num_samples = infer_cfg["num_samples"]  # None means all
-    dataset = MoleculeDataset(
-        root=data_cfg.get("root", "data/processed"),
-        split=split,
-        num_samples=num_samples if num_samples is not None else 0,  # 0 → all
-        num_atoms=int(data_cfg.get("num_atoms", 4)),
-        num_query_points=int(data_cfg.get("num_query_points", 512)),
-        bbox_padding=float(data_cfg.get("bbox_padding", 4.0)),
-        containment_jitter=float(data_cfg.get("containment_jitter", 0.15)),
-        surface_band_width=float(data_cfg.get("surface_bandwidth", 0.5)),
-        probe_radius=float(data_cfg.get("probe_radius", 1.4)),
-    )
-    print(f"[infer_mesh] split='{split}', found {len(dataset)} samples")
+    # ── input selection ─────────────────────────────────────────────────────
+    split = str(infer_cfg["split"])
+    single_sample_dir = _resolve_single_sample_dir(infer_cfg)
+    dataset = None
+    samples: list[dict[str, object]] = []
+    if single_sample_dir is not None:
+        molecule = load_processed_molecule(single_sample_dir)
+        samples = [
+            {
+                "id": single_sample_dir.name,
+                "coords": molecule["coords"],
+                "atom_types": molecule["atom_types"],
+                "radii": molecule["radii"],
+            }
+        ]
+        print(f"[infer_mesh] single sample mode: {single_sample_dir}")
+    else:
+        split = infer_cfg["split"]
+        num_samples = infer_cfg["num_samples"]  # None means all
+        dataset = MoleculeDataset(
+            root=data_cfg.get("root", "data/processed"),
+            split=split,
+            num_samples=num_samples,
+            num_atoms=int(data_cfg.get("num_atoms", 4)),
+            num_query_points=int(data_cfg.get("num_query_points", 512)),
+            bbox_padding=float(data_cfg.get("bbox_padding", 4.0)),
+            containment_jitter=float(data_cfg.get("containment_jitter", 0.15)),
+            surface_band_width=float(data_cfg.get("surface_bandwidth", 0.5)),
+        )
+        samples = [dataset[idx] for idx in range(len(dataset))]
+        print(f"[infer_mesh] split='{split}', found {len(samples)} samples")
     # ── model ───────────────────────────────────────────────────────────────
-    model = SurfaceModel.from_config(model_cfg, num_atom_types=dataset.num_atom_types)
+    num_atom_types = len(ATOM_TYPE_TO_ID) if dataset is None else dataset.num_atom_types
+    model = SurfaceModel.from_config(model_cfg, num_atom_types=num_atom_types)
     model.to(device)
     # ── load checkpoint ─────────────────────────────────────────────────────
     ckpt_path = Path(infer_cfg["ckpt"])
@@ -192,10 +229,9 @@ def main() -> None:
     batch_size = infer_cfg["batch_size"]
     padding = float(data_cfg.get("bbox_padding", 4.0))
     # ── per-molecule inference loop ─────────────────────────────────────────
-    for idx in range(len(dataset)):
-        sample = dataset[idx]
-        mol_id = str(sample.get("id", f"{split}_{idx}"))
-        print(f"\n[infer_mesh] [{idx+1}/{len(dataset)}] molecule: {mol_id}")
+    for idx, sample in enumerate(samples):
+        mol_id = str(sample.get("id", f"sample_{idx}"))
+        print(f"\n[infer_mesh] [{idx+1}/{len(samples)}] molecule: {mol_id}")
         coords = sample["coords"].to(device)       # (N, 3)
         atom_types = sample["atom_types"].to(device)  # (N,)
         radii = sample["radii"].to(device)          # (N,)
