@@ -1,5 +1,5 @@
 batch_size: 2
-num_workers: 0
+num_workers: 2
 epochs: 2000
 lr: 1.0e-5
 weight_decay: 1.0e-5
