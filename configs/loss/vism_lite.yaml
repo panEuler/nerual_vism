@@ -6,10 +6,10 @@ losses:
     weight: 2.0
     groups: [containment]
   weak_prior:
-    # Weak atomic-union prior regularizes both the near-surface region and
-    # the sampled interior anchors to suppress spurious internal zero-crossings.
+    # Weak atomic-union prior defaults to the near-surface region.
+    # During warmup we temporarily expand it to containment anchors via anneal.initial_groups.
     weight: 0.5
-    groups: [containment, surface_band]
+    groups: [surface_band]
   area:
     # Area regularization is evaluated on near-surface samples.
     weight: 1.0
@@ -38,7 +38,11 @@ heaviside_eps: 0.1
 delta_eps: 0.1
 containment_margin: 0.5
 anneal:
-  warmup_epochs: 200
+  warmup_epochs: 30
+  initial_groups:
+    weak_prior: [containment, surface_band]
+  final_groups:
+    weak_prior: [surface_band]
   initial_weights:
     containment: 2.0
     weak_prior: 1.0

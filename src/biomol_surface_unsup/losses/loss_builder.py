@@ -59,6 +59,7 @@ def build_loss_fn(cfg: dict[str, object]):
         batch: dict[str, torch.Tensor],
         model_out: dict[str, torch.Tensor],
         loss_weights: dict[str, float] | None = None,
+        loss_group_overrides: dict[str, list[str]] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute and aggregate all configured unsupervised physical losses.
         
@@ -111,8 +112,14 @@ def build_loss_fn(cfg: dict[str, object]):
             "containment": _group_mask(query_group, query_mask, ["containment"]),
             "surface_band": _group_mask(query_group, query_mask, ["surface_band"]),
         }
+        active_groups = {}
+        for loss_name in SUPPORTED_LOSSES:
+            groups = configured_losses[loss_name]["groups"]
+            if loss_group_overrides is not None and loss_name in loss_group_overrides:
+                groups = loss_group_overrides[loss_name]
+            active_groups[loss_name] = list(groups)
         loss_masks = {
-            loss_name: _group_mask(query_group, query_mask, configured_losses[loss_name]["groups"])
+            loss_name: _group_mask(query_group, query_mask, active_groups[loss_name])
             for loss_name in SUPPORTED_LOSSES
         }
 

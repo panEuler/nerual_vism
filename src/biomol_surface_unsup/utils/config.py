@@ -5,7 +5,7 @@ import yaml
 
 DEFAULT_LOSS_GROUPS = {
     "containment": ["containment"],
-    "weak_prior": ["containment", "surface_band"],
+    "weak_prior": ["surface_band"],
     "area": ["surface_band"],
     "pressure_volume": ["global"],
     "lj_body": ["global"],
@@ -14,7 +14,7 @@ DEFAULT_LOSS_GROUPS = {
 }
 
 DEFAULT_LOSS_WEIGHTS = {
-    "containment": 0.1,
+    "containment": 0.0,
     "weak_prior": 0.5,
     "area": 1.0,
     "pressure_volume": 0.0,

@@ -73,12 +73,16 @@ class Trainer:
         anneal_cfg = dict(loss_cfg.get("anneal", {}))
         initial_weights = anneal_cfg.get("initial_weights")
         final_weights = anneal_cfg.get("final_weights")
+        initial_groups = anneal_cfg.get("initial_groups")
+        final_groups = anneal_cfg.get("final_groups")
         self.loss_weight_scheduler = None
         if initial_weights is not None and final_weights is not None:
             self.loss_weight_scheduler = LossWeightScheduler(
                 initial_weights=initial_weights,
                 final_weights=final_weights,
                 warmup_epochs=int(anneal_cfg.get("warmup_epochs", 0)),
+                initial_groups=initial_groups,
+                final_groups=final_groups,
             )
         self.optimizer = build_optimizer(
             self.model,
@@ -151,6 +155,16 @@ class Trainer:
 
         for epoch in range(self.start_epoch, num_epochs):
             loss_weights = None if self.loss_weight_scheduler is None else self.loss_weight_scheduler.get_weights(epoch)
+            loss_group_overrides = None
+            if self.loss_weight_scheduler is not None:
+                group_overrides = self.loss_weight_scheduler.get_groups(epoch)
+                loss_group_overrides = group_overrides or None
+            if loss_weights is not None or loss_group_overrides is not None:
+                print(
+                    f"[trainer] epoch={epoch} "
+                    f"loss_weights={loss_weights if loss_weights is not None else {}} "
+                    f"loss_group_overrides={loss_group_overrides if loss_group_overrides is not None else {}}"
+                )
             latest_metrics = None
             epoch_total_loss = 0.0
             num_batches = 0
@@ -165,6 +179,7 @@ class Trainer:
                         self.optimizer,
                         self.device,
                         loss_weights=loss_weights,
+                        loss_group_overrides=loss_group_overrides,
                         grad_clip_norm=self.grad_clip_norm,
                     )
                 except RuntimeError as exc:

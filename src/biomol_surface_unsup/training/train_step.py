@@ -18,7 +18,16 @@ def _model_accepts_physics_inputs(model) -> bool:
     return {"charges", "epsilon", "sigma"}.issubset(names)
 
 
-def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad_clip_norm=None):
+def train_step(
+    model,
+    batch,
+    loss_fn,
+    optimizer,
+    device,
+    loss_weights=None,
+    loss_group_overrides=None,
+    grad_clip_norm=None,
+):
     model.train()
     optimizer.zero_grad(set_to_none=True)
     coords = batch["coords"].to(device)
@@ -67,6 +76,7 @@ def train_step(model, batch, loss_fn, optimizer, device, loss_weights=None, grad
         },
         out,
         loss_weights=loss_weights,
+        loss_group_overrides=loss_group_overrides,
     )
     if not torch.isfinite(losses["total"]):
         raise ValueError(f"non-finite total loss before backward: {float(losses['total'].detach().cpu())}")
