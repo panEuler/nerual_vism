@@ -3,14 +3,34 @@ import argparse
 import yaml
 
 
+DEFAULT_LOSS_GROUPS = {
+    "containment": ["containment"],
+    "weak_prior": ["surface_band"],
+    "area": ["surface_band"],
+    "pressure_volume": ["global"],
+    "lj_body": ["global"],
+    "volume": ["global"],
+    "eikonal": ["global", "surface_band"],
+}
+
 DEFAULT_LOSS_WEIGHTS = {
-    "area": 1.0,
-    "volume": 0.0,
-    "pressure_volume": 1.0,
-    "containment": 2.0,
+    "containment": 0.0,
     "weak_prior": 0.5,
+    "area": 1.0,
+    "pressure_volume": 0.0,
+    "lj_body": 0.0,
+    "volume": 0.0,
     "eikonal": 0.5,
-    "lj": 0.0,
+}
+
+LEGACY_LOSS_WEIGHT_KEYS = {
+    "containment": "lambda_containment",
+    "weak_prior": "lambda_prior",
+    "area": "lambda_area",
+    "pressure_volume": "lambda_volume",
+    "lj_body": "lambda_lj",
+    "volume": "lambda_volume",
+    "eikonal": "lambda_eikonal",
 }
 
 
@@ -19,16 +39,23 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def _apply_loss_defaults(loss_cfg):
-    merged = dict(loss_cfg or {})
-    merged.setdefault("lambda_area", DEFAULT_LOSS_WEIGHTS["area"])
-    merged.setdefault("lambda_volume", DEFAULT_LOSS_WEIGHTS["volume"])
-    merged.setdefault("lambda_pressure_volume", DEFAULT_LOSS_WEIGHTS["pressure_volume"])
-    merged.setdefault("lambda_containment", DEFAULT_LOSS_WEIGHTS["containment"])
-    merged.setdefault("lambda_prior", DEFAULT_LOSS_WEIGHTS["weak_prior"])
-    merged.setdefault("lambda_eikonal", DEFAULT_LOSS_WEIGHTS["eikonal"])
-    merged.setdefault("lambda_lj", DEFAULT_LOSS_WEIGHTS["lj"])
-    return merged
+def normalize_loss_config(loss_cfg):
+    normalized = dict(loss_cfg or {})
+    configured_losses = normalized.get("losses", {}) or {}
+    losses = {}
+    for loss_name, default_groups in DEFAULT_LOSS_GROUPS.items():
+        legacy_weight_key = LEGACY_LOSS_WEIGHT_KEYS[loss_name]
+        raw_entry = configured_losses.get(loss_name, {}) or {}
+        groups = raw_entry.get("groups", default_groups)
+        if isinstance(groups, str):
+            groups = [groups]
+        weight = raw_entry.get("weight", normalized.get(legacy_weight_key, DEFAULT_LOSS_WEIGHTS[loss_name]))
+        losses[loss_name] = {
+            "weight": float(weight),
+            "groups": list(groups),
+        }
+    normalized["losses"] = losses
+    return normalized
 
 
 def load_experiment_config():
@@ -36,12 +63,11 @@ def load_experiment_config():
     parser.add_argument("--config", type=str, required=True)
     args = parser.parse_args()
     exp = load_yaml(args.config)
-    loss_cfg = _apply_loss_defaults(load_yaml(exp["loss"]["config"]))
     return {
         "experiment": exp,
         "data": load_yaml(exp["data"]["config"]),
         "model": load_yaml(exp["model"]["config"]),
-        "loss": loss_cfg,
+        "loss": normalize_loss_config(load_yaml(exp["loss"]["config"])),
         "train": load_yaml(exp["train"]["config"]),
     }
 
@@ -51,7 +77,6 @@ def load_eval_config():
 
 
 def load_infer_config():
-    """Parse CLI arguments for the inference script."""
     parser = argparse.ArgumentParser(description="Neural-VISM inference / mesh extraction")
     parser.add_argument("--ckpt", type=str, required=True, help="Checkpoint path (.pt)")
     parser.add_argument(
@@ -91,6 +116,18 @@ def load_infer_config():
         help="Query points per forward pass (default: 8192)",
     )
     parser.add_argument(
+        "--block_voxel_size",
+        type=int,
+        default=64,
+        help="Number of voxels per axis in each inference block (default: 64)",
+    )
+    parser.add_argument(
+        "--narrow_band_width",
+        type=float,
+        default=2.0,
+        help="Absolute SDF threshold in Angstrom used to crop a narrow band for mesh extraction (default: 2.0)",
+    )
+    parser.add_argument(
         "--no_mesh",
         action="store_true",
         help="Skip mesh extraction (only predicts SDF grid)",
@@ -99,6 +136,16 @@ def load_infer_config():
         "--no_slices",
         action="store_true",
         help="Skip SDF slice visualization",
+    )
+    parser.add_argument(
+        "--no_narrow_band_crop",
+        action="store_true",
+        help="Disable narrow-band cropping before marching cubes",
+    )
+    parser.add_argument(
+        "--no_native_ops",
+        action="store_true",
+        help="Disable optional C++/CUDA native ops and use pure Python fallbacks",
     )
     parser.add_argument(
         "--device",
@@ -139,12 +186,11 @@ def load_infer_config():
 
     args = parser.parse_args()
     exp = load_yaml(args.config)
-    loss_cfg = _apply_loss_defaults(load_yaml(exp["loss"]["config"]))
     return {
         "experiment": exp,
         "data": load_yaml(exp["data"]["config"]),
         "model": load_yaml(exp["model"]["config"]),
-        "loss": loss_cfg,
+        "loss": normalize_loss_config(load_yaml(exp["loss"]["config"])),
         "train": load_yaml(exp["train"]["config"]),
         "infer": {
             "ckpt": args.ckpt,
@@ -153,8 +199,12 @@ def load_infer_config():
             "resolution": args.resolution,
             "output_dir": args.output_dir,
             "batch_size": args.batch_size,
+            "block_voxel_size": args.block_voxel_size,
+            "narrow_band_width": args.narrow_band_width,
             "extract_mesh": not args.no_mesh,
             "plot_slices": not args.no_slices,
+            "narrow_band_crop": not args.no_narrow_band_crop,
+            "use_native_ops": not args.no_native_ops,
             "device": args.device,
             "num_samples": args.num_samples,
             "processed_sample_dir": args.processed_sample_dir,

@@ -1,112 +1,106 @@
 """Inference script: load a trained checkpoint and extract molecular surfaces.
+
 Usage (from project root)
 --------------------------
-python scripts/infer_mesh.py \\
-    --ckpt  outputs/checkpoints/latest.pt \\
-    --config configs/experiment/real_schnet_debug.yaml \\
-    --processed_sample_dir /path/to/processed/sample \\
-    --spacing_angstrom 0.1 \\
+python scripts/infer_mesh.py \
+    --ckpt outputs/checkpoints/latest.pt \
+    --config configs/experiment/my_train.yaml \
+    --processed_sample_dir /path/to/processed/sample \
+    --spacing_angstrom 0.5 \
+    --block_voxel_size 64 \
     --output_dir outputs/meshes
-Optional flags
---------------
---no_mesh       Skip marching-cubes extraction (only dump SDF grid as .npy)
---no_slices     Skip matplotlib SDF slice plots
---batch_size N  Number of query points per forward pass (default 8192)
---device cpu    Force CPU even when CUDA is available
---num_samples N Limit to first N molecules in the split
 """
 from __future__ import annotations
+
+import json
+import math
 import sys
 from pathlib import Path
-# ── allow running from the repo root without installing the package ──────────
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 import numpy as np
 import torch
+
+# allow running from the repo root without installing the package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from biomol_surface_unsup.datasets.molecule_dataset import ATOM_TYPE_TO_ID, MoleculeDataset
 from biomol_surface_unsup.inference import load_processed_molecule
+from biomol_surface_unsup.inference.native_ops import make_grid_block, narrow_band_bbox
 from biomol_surface_unsup.models.surface_model import SurfaceModel
 from biomol_surface_unsup.utils.config import load_infer_config
 from biomol_surface_unsup.visualization.export_mesh import export_mesh
 from biomol_surface_unsup.visualization.plot_slices import plot_slices
-# ────────────────────────────────────────────────────────────────────────────
-# Helper: build a uniform 3-D query grid around a molecule
-# ────────────────────────────────────────────────────────────────────────────
-def _make_query_grid(
+
+
+def _compute_grid_metadata(
     coords: torch.Tensor,
     radii: torch.Tensor,
     spacing_angstrom: float,
     padding: float = 4.0,
-) -> tuple[torch.Tensor, np.ndarray, np.ndarray, tuple[int, int, int]]:
-    """Return a flat tensor of grid points and the bounding-box metadata.
-    Args:
-        coords: Atom positions, shape (N, 3).
-        radii: Van-der-Waals radii, shape (N,).
-        spacing_angstrom: Target physical spacing between adjacent samples.
-        padding: Extra Å margin beyond the vdW surface.
-    Returns:
-        query_flat: Tensor of shape (R³, 3).
-        min_xyz:    np.ndarray of shape (3,), world-space lower corner.
-        spacing:    np.ndarray of shape (3,), actual Å step per axis.
-        grid_shape: Tuple[int, int, int] used to reshape the predicted SDF grid.
-    """
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int, int]]:
     spacing_angstrom = float(spacing_angstrom)
     if spacing_angstrom <= 0.0:
         raise ValueError(f"spacing_angstrom must be positive, got {spacing_angstrom}")
 
-    margin = float(radii.max().item()) + padding
-    lo = coords.min(dim=0).values.cpu().numpy() - margin
-    hi = coords.max(dim=0).values.cpu().numpy() + margin
+    margin = float(radii.max().item()) + float(padding)
+    lo = coords.min(dim=0).values.detach().cpu().numpy() - margin
+    hi = coords.max(dim=0).values.detach().cpu().numpy() + margin
 
-    axis_counts = [
+    grid_shape = tuple(
         max(2, int(np.ceil((hi[i] - lo[i]) / spacing_angstrom)) + 1)
         for i in range(3)
-    ]
-    axes = [np.linspace(lo[i], hi[i], axis_counts[i], dtype=np.float32) for i in range(3)]
-    gx, gy, gz = np.meshgrid(*axes, indexing="ij")
-    grid_xyz = np.stack([gx, gy, gz], axis=-1)
-    query_flat = torch.tensor(
-        grid_xyz.reshape(-1, 3), dtype=torch.float32
     )
     spacing = np.asarray(
         [
-            (axes[i][1] - axes[i][0]) if axis_counts[i] > 1 else spacing_angstrom
+            ((hi[i] - lo[i]) / (grid_shape[i] - 1)) if grid_shape[i] > 1 else spacing_angstrom
             for i in range(3)
         ],
         dtype=np.float32,
     )
-    return query_flat, lo.astype(np.float32), spacing, tuple(axis_counts)
-# ────────────────────────────────────────────────────────────────────────────
-# Helper: run the model over a large set of query points in mini-batches
-# ────────────────────────────────────────────────────────────────────────────
-def _predict_sdf(
+    return lo.astype(np.float32), spacing, grid_shape
+
+
+def _iter_grid_blocks(
+    grid_shape: tuple[int, int, int],
+    block_voxel_size: int,
+):
+    block_size = max(1, int(block_voxel_size))
+    for x0 in range(0, grid_shape[0], block_size):
+        x1 = min(x0 + block_size, grid_shape[0])
+        for y0 in range(0, grid_shape[1], block_size):
+            y1 = min(y0 + block_size, grid_shape[1])
+            for z0 in range(0, grid_shape[2], block_size):
+                z1 = min(z0 + block_size, grid_shape[2])
+                block_shape = (x1 - x0, y1 - y0, z1 - z0)
+                yield (slice(x0, x1), slice(y0, y1), slice(z0, z1)), (x0, y0, z0), block_shape
+
+
+def _num_blocks(grid_shape: tuple[int, int, int], block_voxel_size: int) -> int:
+    block_size = max(1, int(block_voxel_size))
+    return (
+        math.ceil(grid_shape[0] / block_size)
+        * math.ceil(grid_shape[1] / block_size)
+        * math.ceil(grid_shape[2] / block_size)
+    )
+
+
+def _predict_sdf_block(
     model: SurfaceModel,
     coords: torch.Tensor,
     atom_types: torch.Tensor,
     radii: torch.Tensor,
     query_points: torch.Tensor,
     device: torch.device,
-    batch_size: int = 8192,
-) -> np.ndarray:
-    """Run SDF prediction in mini-batches to avoid OOM.
-    Args:
-        model: Trained SurfaceModel in eval mode.
-        coords: (N, 3) atom coordinates on ``device``.
-        atom_types: (N,) integer atom-type indices on ``device``.
-        radii: (N,) vdW radii on ``device``.
-        query_points: (Q, 3) grid points on CPU (moved to device in batches).
-        device: Target device.
-        batch_size: Max query points per forward pass.
-    Returns:
-        sdf_values: np.ndarray of shape (Q,).
-    """
-    results: list[np.ndarray] = []
-    total = query_points.shape[0]
-    for start in range(0, total, batch_size):
-        batch_q = query_points[start : start + batch_size].to(device)
-        with torch.no_grad():
-            out = model(coords, atom_types, radii, batch_q)
-        results.append(out["sdf"].squeeze(-1).cpu().numpy())
-    return np.concatenate(results, axis=0)
+    batch_size: int,
+) -> torch.Tensor:
+    total = int(query_points.shape[0])
+    predictions = torch.empty((total,), dtype=torch.float32, device=device)
+    with torch.no_grad():
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            out = model(coords, atom_types, radii, query_points[start:end])
+            predictions[start:end] = out["sdf"].reshape(-1)
+    return predictions
 
 
 def _resolve_single_sample_dir(infer_cfg: dict[str, object]) -> Path | None:
@@ -126,18 +120,146 @@ def _resolve_single_sample_dir(infer_cfg: dict[str, object]) -> Path | None:
     preprocess_dir = Path(str(infer_cfg.get("preprocess_dir", "outputs/infer_processed")))
     process_one_pdb(str(pdb_file), str(chain_id), str(preprocess_dir))
     return preprocess_dir / Path(str(pdb_file)).stem
-# ────────────────────────────────────────────────────────────────────────────
-# Helper: marching cubes with graceful fallback
-# ────────────────────────────────────────────────────────────────────────────
+
+
+def _expand_bbox(
+    bbox: tuple[int, int, int, int, int, int] | None,
+    grid_shape: tuple[int, int, int],
+    halo: int = 1,
+) -> tuple[int, int, int, int, int, int] | None:
+    if bbox is None:
+        return None
+    x0, x1, y0, y1, z0, z1 = bbox
+    return (
+        max(0, x0 - halo),
+        min(grid_shape[0], x1 + halo),
+        max(0, y0 - halo),
+        min(grid_shape[1], y1 + halo),
+        max(0, z0 - halo),
+        min(grid_shape[2], z1 + halo),
+    )
+
+
+def _merge_bbox(
+    current: tuple[int, int, int, int, int, int] | None,
+    local: tuple[int, int, int, int, int, int] | None,
+    start_indices: tuple[int, int, int],
+) -> tuple[int, int, int, int, int, int] | None:
+    if local is None:
+        return current
+
+    global_local = (
+        local[0] + start_indices[0],
+        local[1] + start_indices[0],
+        local[2] + start_indices[1],
+        local[3] + start_indices[1],
+        local[4] + start_indices[2],
+        local[5] + start_indices[2],
+    )
+    if current is None:
+        return global_local
+    return (
+        min(current[0], global_local[0]),
+        max(current[1], global_local[1]),
+        min(current[2], global_local[2]),
+        max(current[3], global_local[3]),
+        min(current[4], global_local[4]),
+        max(current[5], global_local[5]),
+    )
+
+
+def _write_grid_metadata(
+    path: Path,
+    lo: np.ndarray,
+    spacing: np.ndarray,
+    grid_shape: tuple[int, int, int],
+    spacing_angstrom: float,
+) -> None:
+    payload = {
+        "origin_angstrom": [float(v) for v in lo.tolist()],
+        "spacing_angstrom": [float(v) for v in spacing.tolist()],
+        "grid_shape": [int(v) for v in grid_shape],
+        "target_spacing_angstrom": float(spacing_angstrom),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _run_blockwise_grid_inference(
+    model: SurfaceModel,
+    coords: torch.Tensor,
+    atom_types: torch.Tensor,
+    radii: torch.Tensor,
+    *,
+    device: torch.device,
+    batch_size: int,
+    lo: np.ndarray,
+    spacing: np.ndarray,
+    grid_shape: tuple[int, int, int],
+    block_voxel_size: int,
+    output_path: Path,
+    narrow_band_width: float,
+    track_narrow_band: bool,
+    use_native_ops: bool,
+) -> tuple[float, float, tuple[int, int, int, int, int, int] | None]:
+    total_blocks = _num_blocks(grid_shape, block_voxel_size)
+    lo_tensor = torch.as_tensor(lo, dtype=torch.float32, device=device)
+    spacing_tensor = torch.as_tensor(spacing, dtype=torch.float32, device=device)
+    sdf_memmap = np.lib.format.open_memmap(output_path, mode="w+", dtype=np.float32, shape=grid_shape)
+
+    sdf_min = float("inf")
+    sdf_max = float("-inf")
+    band_bbox = None
+
+    for block_idx, (grid_slices, start_indices, block_shape) in enumerate(
+        _iter_grid_blocks(grid_shape, block_voxel_size),
+        start=1,
+    ):
+        query_block = make_grid_block(
+            lo_tensor,
+            spacing_tensor,
+            start_indices,
+            block_shape,
+            use_native_ops=use_native_ops,
+        )
+        sdf_block = _predict_sdf_block(
+            model,
+            coords,
+            atom_types,
+            radii,
+            query_block,
+            device,
+            batch_size,
+        ).reshape(block_shape)
+
+        sdf_min = min(sdf_min, float(sdf_block.min().item()))
+        sdf_max = max(sdf_max, float(sdf_block.max().item()))
+
+        if track_narrow_band:
+            local_bbox = narrow_band_bbox(
+                sdf_block,
+                narrow_band_width,
+                use_native_ops=use_native_ops,
+            )
+            band_bbox = _merge_bbox(band_bbox, local_bbox, start_indices)
+
+        sdf_memmap[grid_slices] = sdf_block.detach().cpu().numpy()
+
+        if block_idx == 1 or block_idx == total_blocks or (block_idx % 10 == 0):
+            print(
+                f"[infer_mesh]   block {block_idx}/{total_blocks} "
+                f"written, sdf range so far: [{sdf_min:.3f}, {sdf_max:.3f}]"
+            )
+
+    sdf_memmap.flush()
+    del sdf_memmap
+    return sdf_min, sdf_max, band_bbox
+
+
 def _marching_cubes(
     sdf_grid: np.ndarray,
     lo: np.ndarray,
     spacing: np.ndarray,
 ) -> dict[str, np.ndarray] | None:
-    """Extract the zero-isosurface from ``sdf_grid``.
-    Returns:
-        dict with 'verts' (V, 3) and 'faces' (F, 3), or None if no surface.
-    """
     try:
         from skimage.measure import marching_cubes as skimage_mc
     except ImportError:
@@ -151,18 +273,16 @@ def _marching_cubes(
     except ValueError as exc:
         print(f"[infer_mesh] marching_cubes could not find a surface: {exc}")
         return None
-    # Convert voxel indices → real-space Å coordinates
     verts_world = verts_vox * spacing + lo
     return {"verts": verts_world.astype(np.float32), "faces": faces.astype(np.int32)}
-# ────────────────────────────────────────────────────────────────────────────
-# Main
-# ────────────────────────────────────────────────────────────────────────────
+
+
 def main() -> None:
     cfg = load_infer_config()
     infer_cfg = cfg["infer"]
     data_cfg = cfg["data"]
     model_cfg = cfg["model"]
-    # ── device ──────────────────────────────────────────────────────────────
+
     if infer_cfg["device"] is not None:
         device = torch.device(infer_cfg["device"])
     elif torch.cuda.is_available():
@@ -170,7 +290,7 @@ def main() -> None:
     else:
         device = torch.device("cpu")
     print(f"[infer_mesh] using device: {device}")
-    # ── input selection ─────────────────────────────────────────────────────
+
     split = str(infer_cfg["split"])
     single_sample_dir = _resolve_single_sample_dir(infer_cfg)
     dataset = None
@@ -187,8 +307,7 @@ def main() -> None:
         ]
         print(f"[infer_mesh] single sample mode: {single_sample_dir}")
     else:
-        split = infer_cfg["split"]
-        num_samples = infer_cfg["num_samples"]  # None means all
+        num_samples = infer_cfg["num_samples"]
         dataset = MoleculeDataset(
             root=data_cfg.get("root", "data/processed"),
             split=split,
@@ -201,19 +320,15 @@ def main() -> None:
         )
         samples = [dataset[idx] for idx in range(len(dataset))]
         print(f"[infer_mesh] split='{split}', found {len(samples)} samples")
-    # ── model ───────────────────────────────────────────────────────────────
+
     num_atom_types = len(ATOM_TYPE_TO_ID) if dataset is None else dataset.num_atom_types
     model = SurfaceModel.from_config(model_cfg, num_atom_types=num_atom_types)
     model.to(device)
-    # ── load checkpoint ─────────────────────────────────────────────────────
+
     ckpt_path = Path(infer_cfg["ckpt"])
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     raw_ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    # Support multiple checkpoint formats:
-    #   1) {"model": ..., "epoch": ..., ...} saved by training/checkpoint.py
-    #   2) {"model_state_dict": ..., "epoch": ...}
-    #   3) raw state_dict
     if isinstance(raw_ckpt, dict) and "model" in raw_ckpt:
         state_dict = raw_ckpt["model"]
         saved_epoch = raw_ckpt.get("epoch", "?")
@@ -227,52 +342,83 @@ def main() -> None:
         print(f"[infer_mesh] loaded raw state dict from: {ckpt_path}")
     model.load_state_dict(state_dict)
     model.eval()
-    # ── output directory ────────────────────────────────────────────────────
+
     out_dir = Path(infer_cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     spacing_angstrom = float(infer_cfg.get("spacing_angstrom", 0.1))
-    batch_size = infer_cfg["batch_size"]
+    block_voxel_size = int(infer_cfg.get("block_voxel_size", 64))
+    batch_size = int(infer_cfg["batch_size"])
     padding = float(data_cfg.get("bbox_padding", 4.0))
-    # ── per-molecule inference loop ─────────────────────────────────────────
+    narrow_band_width = float(infer_cfg.get("narrow_band_width", 2.0))
+    narrow_band_crop = bool(infer_cfg.get("narrow_band_crop", True))
+    use_native_ops = bool(infer_cfg.get("use_native_ops", True))
+
     for idx, sample in enumerate(samples):
         mol_id = str(sample.get("id", f"sample_{idx}"))
         print(f"\n[infer_mesh] [{idx+1}/{len(samples)}] molecule: {mol_id}")
-        coords = sample["coords"].to(device)       # (N, 3)
-        atom_types = sample["atom_types"].to(device)  # (N,)
-        radii = sample["radii"].to(device)          # (N,)
-        # Build 3-D query grid
-        query_flat, lo, spacing, grid_shape = _make_query_grid(
-            coords,
-            radii,
-            spacing_angstrom,
-            padding,
-        )
-        # Predict SDF
-        sdf_values = _predict_sdf(
-            model, coords, atom_types, radii, query_flat, device, batch_size
-        )
-        sdf_grid = sdf_values.reshape(grid_shape)
+
+        coords = sample["coords"].to(device)
+        atom_types = sample["atom_types"].to(device)
+        radii = sample["radii"].to(device)
+
+        lo, spacing, grid_shape = _compute_grid_metadata(coords, radii, spacing_angstrom, padding)
         print(
-            f"[infer_mesh]   SDF range: [{sdf_values.min():.3f}, {sdf_values.max():.3f}], "
-            f"grid shape: {sdf_grid.shape}, spacing(Å): {tuple(float(v) for v in spacing)}"
+            f"[infer_mesh]   grid shape: {grid_shape}, spacing(Å): {tuple(float(v) for v in spacing)}, "
+            f"block_voxel_size={block_voxel_size}"
         )
-        # Save raw SDF grid (.npy)
+
         npy_path = out_dir / f"{mol_id}_sdf.npy"
-        np.save(npy_path, sdf_grid)
+        meta_path = out_dir / f"{mol_id}_sdf_meta.json"
+        _write_grid_metadata(meta_path, lo, spacing, grid_shape, spacing_angstrom)
+
+        sdf_min, sdf_max, band_bbox = _run_blockwise_grid_inference(
+            model,
+            coords,
+            atom_types,
+            radii,
+            device=device,
+            batch_size=batch_size,
+            lo=lo,
+            spacing=spacing,
+            grid_shape=grid_shape,
+            block_voxel_size=block_voxel_size,
+            output_path=npy_path,
+            narrow_band_width=narrow_band_width,
+            track_narrow_band=bool(infer_cfg["extract_mesh"]) and narrow_band_crop,
+            use_native_ops=use_native_ops,
+        )
+        print(f"[infer_mesh]   SDF range: [{sdf_min:.3f}, {sdf_max:.3f}]")
         print(f"[infer_mesh]   SDF grid saved → {npy_path}")
-        # ── mesh extraction ─────────────────────────────────────────────────
+        print(f"[infer_mesh]   metadata saved → {meta_path}")
+
+        sdf_grid = np.load(npy_path, mmap_mode="r")
+
         if infer_cfg["extract_mesh"]:
-            mesh = _marching_cubes(sdf_grid, lo, spacing)
-            if mesh is not None:
-                mesh_path = out_dir / f"{mol_id}_surface.obj"
-                export_mesh(mesh, mesh_path)
-                print(
-                    f"[infer_mesh]   mesh saved → {mesh_path}  "
-                    f"({len(mesh['verts'])} verts, {len(mesh['faces'])} faces)"
-                )
+            crop_bbox = _expand_bbox(band_bbox, grid_shape, halo=1) if narrow_band_crop else None
+            if crop_bbox is None and narrow_band_crop:
+                print("[infer_mesh]   (no narrow band found near the zero level — skipping mesh extraction)")
             else:
-                print("[infer_mesh]   (no surface extracted — SDF may not cross zero)")
-        # ── SDF slice plots ─────────────────────────────────────────────────
+                crop_lo = lo
+                crop_grid = sdf_grid
+                if crop_bbox is not None:
+                    x0, x1, y0, y1, z0, z1 = crop_bbox
+                    crop_grid = np.asarray(sdf_grid[x0:x1, y0:y1, z0:z1])
+                    crop_lo = lo + spacing * np.asarray([x0, y0, z0], dtype=np.float32)
+                    print(
+                        "[infer_mesh]   marching cubes crop bbox="
+                        f"{crop_bbox}, crop shape={crop_grid.shape}"
+                    )
+                mesh = _marching_cubes(crop_grid, crop_lo, spacing)
+                if mesh is not None:
+                    mesh_path = out_dir / f"{mol_id}_surface.obj"
+                    export_mesh(mesh, mesh_path)
+                    print(
+                        f"[infer_mesh]   mesh saved → {mesh_path} "
+                        f"({len(mesh['verts'])} verts, {len(mesh['faces'])} faces)"
+                    )
+                else:
+                    print("[infer_mesh]   (no surface extracted — SDF may not cross zero)")
+
         if infer_cfg["plot_slices"]:
             slice_path = out_dir / f"{mol_id}_slices.png"
             try:
@@ -286,6 +432,9 @@ def main() -> None:
                 print(f"[infer_mesh]   slices saved → {slice_path}")
             except ImportError as exc:
                 print(f"[infer_mesh]   WARNING: {exc}")
+
     print(f"\n[infer_mesh] Done. All outputs in: {out_dir.resolve()}")
+
+
 if __name__ == "__main__":
     main()
