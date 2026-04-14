@@ -61,14 +61,68 @@ def normalize_loss_config(loss_cfg):
 def load_experiment_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
+    parser.add_argument(
+        "--data_num_samples",
+        type=int,
+        default=None,
+        help="Override data.num_samples for quick subset experiments",
+    )
+    parser.add_argument(
+        "--train_resume_from",
+        type=str,
+        default=None,
+        help="Resume training from a checkpoint path",
+    )
+    parser.add_argument(
+        "--train_output_dir",
+        type=str,
+        default=None,
+        help="Override train.output_dir for checkpoints",
+    )
+    parser.add_argument(
+        "--train_epochs",
+        type=int,
+        default=None,
+        help="Override train.epochs",
+    )
+    parser.add_argument(
+        "--train_batch_size",
+        type=int,
+        default=None,
+        help="Override train.batch_size",
+    )
+    parser.add_argument(
+        "--train_lr",
+        type=float,
+        default=None,
+        help="Override train.lr",
+    )
     args = parser.parse_args()
     exp = load_yaml(args.config)
+    data_cfg = load_yaml(exp["data"]["config"])
+    model_cfg = load_yaml(exp["model"]["config"])
+    loss_cfg = normalize_loss_config(load_yaml(exp["loss"]["config"]))
+    train_cfg = load_yaml(exp["train"]["config"])
+
+    if args.data_num_samples is not None:
+        data_cfg["num_samples"] = int(args.data_num_samples)
+    if args.train_resume_from is not None:
+        train_cfg["resume_from"] = args.train_resume_from
+    if args.train_output_dir is not None:
+        train_cfg["output_dir"] = args.train_output_dir
+    if args.train_epochs is not None:
+        train_cfg["epochs"] = int(args.train_epochs)
+    if args.train_batch_size is not None:
+        train_cfg["batch_size"] = int(args.train_batch_size)
+    if args.train_lr is not None:
+        train_cfg["lr"] = float(args.train_lr)
+
     return {
         "experiment": exp,
-        "data": load_yaml(exp["data"]["config"]),
-        "model": load_yaml(exp["model"]["config"]),
-        "loss": normalize_loss_config(load_yaml(exp["loss"]["config"])),
-        "train": load_yaml(exp["train"]["config"]),
+        "data": data_cfg,
+        "model": model_cfg,
+        "loss": loss_cfg,
+        "train": train_cfg,
     }
 
 

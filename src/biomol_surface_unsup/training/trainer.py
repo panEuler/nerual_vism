@@ -56,7 +56,7 @@ class Trainer:
         self.train_loader = DataLoader(
             self.train_dataset,
             batch_size=batch_size,
-            shuffle=False, # 为什么不打乱
+            shuffle=bool(train_cfg.get("shuffle", True)),
             num_workers=int(train_cfg.get("num_workers", 0)),
             collate_fn=collate_fn,
         )

@@ -4,7 +4,7 @@ train_split: train
 val_split: val
 test_split: test
 num_query_points: 512
-num_samples: null
+num_samples: 2000
 bbox_padding: 4.0
 surface_band_width: 0.25
 containment_jitter: 0.15

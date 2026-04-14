@@ -1,5 +1,6 @@
 batch_size: 2
 num_workers: 2
+shuffle: true
 epochs: 2000
 lr: 1.0e-5
 weight_decay: 1.0e-5
@@ -12,5 +13,4 @@ save_every: 5
 
 # Stability knobs for implicit-surface training.
 grad_clip_norm: 1.0
-
 

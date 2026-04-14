@@ -1,10 +1,13 @@
 batch_size: 1
 num_workers: 0
 shuffle: true
-epochs: 2
-lr: 1.0e-3
+epochs: 30
+lr: 5.0e-5
 weight_decay: 1.0e-5
 device: cuda
 seed: 42
-log_every: 10
+
+log_every: 1
 save_every: 1
+grad_clip_norm: 1.0
+output_dir: outputs/checkpoints_fast
