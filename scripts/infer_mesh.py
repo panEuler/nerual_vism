@@ -268,10 +268,23 @@ def _marching_cubes(
             "             Install with: pip install scikit-image"
         )
         return None
+    sdf_grid = np.array(sdf_grid, dtype=np.float32, copy=True, order="C")
+    sdf_min = float(np.min(sdf_grid))
+    sdf_max = float(np.max(sdf_grid))
+    if not (sdf_min <= 0.0 <= sdf_max):
+        print(
+            "[infer_mesh] no surface extracted: SDF does not cross zero "
+            f"(min={sdf_min:.6f}, max={sdf_max:.6f})"
+        )
+        return None
+
     try:
         verts_vox, faces, _normals, _vals = skimage_mc(sdf_grid, level=0.0)
     except ValueError as exc:
-        print(f"[infer_mesh] marching_cubes could not find a surface: {exc}")
+        print(
+            "[infer_mesh] marching_cubes failed after zero-crossing check: "
+            f"{exc} (min={sdf_min:.6f}, max={sdf_max:.6f})"
+        )
         return None
     verts_world = verts_vox * spacing + lo
     return {"verts": verts_world.astype(np.float32), "faces": faces.astype(np.int32)}
@@ -399,10 +412,15 @@ def main() -> None:
                 print("[infer_mesh]   (no narrow band found near the zero level — skipping mesh extraction)")
             else:
                 crop_lo = lo
-                crop_grid = sdf_grid
+                crop_grid = np.array(sdf_grid, dtype=np.float32, copy=True, order="C")
                 if crop_bbox is not None:
                     x0, x1, y0, y1, z0, z1 = crop_bbox
-                    crop_grid = np.asarray(sdf_grid[x0:x1, y0:y1, z0:z1])
+                    crop_grid = np.array(
+                        sdf_grid[x0:x1, y0:y1, z0:z1],
+                        dtype=np.float32,
+                        copy=True,
+                        order="C",
+                    )
                     crop_lo = lo + spacing * np.asarray([x0, y0, z0], dtype=np.float32)
                     print(
                         "[infer_mesh]   marching cubes crop bbox="
