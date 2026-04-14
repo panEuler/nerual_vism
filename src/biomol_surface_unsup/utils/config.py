@@ -5,7 +5,7 @@ import yaml
 
 DEFAULT_LOSS_GROUPS = {
     "containment": ["containment"],
-    "weak_prior": ["surface_band"],
+    "weak_prior": ["containment", "surface_band"],
     "area": ["surface_band"],
     "pressure_volume": ["global"],
     "lj_body": ["global"],
@@ -14,7 +14,7 @@ DEFAULT_LOSS_GROUPS = {
 }
 
 DEFAULT_LOSS_WEIGHTS = {
-    "containment": 0.0,
+    "containment": 0.1,
     "weak_prior": 0.5,
     "area": 1.0,
     "pressure_volume": 0.0,
@@ -128,6 +128,18 @@ def load_infer_config():
         help="Absolute SDF threshold in Angstrom used to crop a narrow band for mesh extraction (default: 2.0)",
     )
     parser.add_argument(
+        "--isosurface_level",
+        type=float,
+        default=0.0,
+        help="Isosurface level used by marching cubes (default: 0.0)",
+    )
+    parser.add_argument(
+        "--min_component_faces",
+        type=int,
+        default=0,
+        help="Discard mesh connected components with fewer faces than this threshold before keeping the largest shell (default: 0)",
+    )
+    parser.add_argument(
         "--no_mesh",
         action="store_true",
         help="Skip mesh extraction (only predicts SDF grid)",
@@ -201,6 +213,8 @@ def load_infer_config():
             "batch_size": args.batch_size,
             "block_voxel_size": args.block_voxel_size,
             "narrow_band_width": args.narrow_band_width,
+            "isosurface_level": args.isosurface_level,
+            "min_component_faces": args.min_component_faces,
             "extract_mesh": not args.no_mesh,
             "plot_slices": not args.no_slices,
             "narrow_band_crop": not args.no_narrow_band_crop,

@@ -259,6 +259,7 @@ def _marching_cubes(
     sdf_grid: np.ndarray,
     lo: np.ndarray,
     spacing: np.ndarray,
+    level: float,
 ) -> dict[str, np.ndarray] | None:
     try:
         from skimage.measure import marching_cubes as skimage_mc
@@ -271,23 +272,90 @@ def _marching_cubes(
     sdf_grid = np.array(sdf_grid, dtype=np.float32, copy=True, order="C")
     sdf_min = float(np.min(sdf_grid))
     sdf_max = float(np.max(sdf_grid))
-    if not (sdf_min <= 0.0 <= sdf_max):
+    if not (sdf_min <= level <= sdf_max):
         print(
-            "[infer_mesh] no surface extracted: SDF does not cross zero "
-            f"(min={sdf_min:.6f}, max={sdf_max:.6f})"
+            "[infer_mesh] no surface extracted: SDF does not cross the requested level "
+            f"(level={level:.6f}, min={sdf_min:.6f}, max={sdf_max:.6f})"
         )
         return None
 
     try:
-        verts_vox, faces, _normals, _vals = skimage_mc(sdf_grid, level=0.0)
+        verts_vox, faces, _normals, _vals = skimage_mc(sdf_grid, level=level)
     except ValueError as exc:
         print(
-            "[infer_mesh] marching_cubes failed after zero-crossing check: "
-            f"{exc} (min={sdf_min:.6f}, max={sdf_max:.6f})"
+            "[infer_mesh] marching_cubes failed after level-crossing check: "
+            f"{exc} (level={level:.6f}, min={sdf_min:.6f}, max={sdf_max:.6f})"
         )
         return None
     verts_world = verts_vox * spacing + lo
     return {"verts": verts_world.astype(np.float32), "faces": faces.astype(np.int32)}
+
+
+def _filter_mesh_components(
+    mesh: dict[str, np.ndarray],
+    min_component_faces: int,
+) -> tuple[dict[str, np.ndarray] | None, dict[str, int]]:
+    faces = mesh["faces"]
+    verts = mesh["verts"]
+    num_faces = int(faces.shape[0])
+    if num_faces == 0:
+        return None, {
+            "num_components": 0,
+            "kept_faces": 0,
+            "dropped_small_components": 0,
+            "kept_component_faces": 0,
+        }
+
+    vertex_to_faces: dict[int, list[int]] = {}
+    for face_idx, face in enumerate(faces):
+        for vertex_idx in face.tolist():
+            vertex_to_faces.setdefault(int(vertex_idx), []).append(face_idx)
+
+    visited = np.zeros(num_faces, dtype=bool)
+    components: list[list[int]] = []
+    for seed_face in range(num_faces):
+        if visited[seed_face]:
+            continue
+        stack = [seed_face]
+        visited[seed_face] = True
+        component: list[int] = []
+        while stack:
+            face_idx = stack.pop()
+            component.append(face_idx)
+            for vertex_idx in faces[face_idx].tolist():
+                for neighbor_face in vertex_to_faces[int(vertex_idx)]:
+                    if not visited[neighbor_face]:
+                        visited[neighbor_face] = True
+                        stack.append(neighbor_face)
+        components.append(component)
+
+    eligible_components = [
+        component for component in components if len(component) >= int(min_component_faces)
+    ]
+    if not eligible_components:
+        return None, {
+            "num_components": len(components),
+            "kept_faces": 0,
+            "dropped_small_components": len(components),
+            "kept_component_faces": 0,
+        }
+
+    largest_component = max(eligible_components, key=len)
+    kept_face_indices = np.asarray(sorted(largest_component), dtype=np.int32)
+    kept_faces = faces[kept_face_indices]
+    kept_vertex_indices = np.unique(kept_faces.reshape(-1))
+    remap = np.full(int(verts.shape[0]), -1, dtype=np.int32)
+    remap[kept_vertex_indices] = np.arange(kept_vertex_indices.shape[0], dtype=np.int32)
+    filtered_mesh = {
+        "verts": verts[kept_vertex_indices].astype(np.float32, copy=False),
+        "faces": remap[kept_faces].astype(np.int32, copy=False),
+    }
+    return filtered_mesh, {
+        "num_components": len(components),
+        "kept_faces": int(filtered_mesh["faces"].shape[0]),
+        "dropped_small_components": len(components) - len(eligible_components),
+        "kept_component_faces": len(largest_component),
+    }
 
 
 def main() -> None:
@@ -363,6 +431,8 @@ def main() -> None:
     batch_size = int(infer_cfg["batch_size"])
     padding = float(data_cfg.get("bbox_padding", 4.0))
     narrow_band_width = float(infer_cfg.get("narrow_band_width", 2.0))
+    isosurface_level = float(infer_cfg.get("isosurface_level", 0.0))
+    min_component_faces = int(infer_cfg.get("min_component_faces", 0))
     narrow_band_crop = bool(infer_cfg.get("narrow_band_crop", True))
     use_native_ops = bool(infer_cfg.get("use_native_ops", True))
 
@@ -426,7 +496,33 @@ def main() -> None:
                         "[infer_mesh]   marching cubes crop bbox="
                         f"{crop_bbox}, crop shape={crop_grid.shape}"
                     )
-                mesh = _marching_cubes(crop_grid, crop_lo, spacing)
+                mesh = _marching_cubes(
+                    crop_grid,
+                    crop_lo,
+                    spacing,
+                    level=isosurface_level,
+                )
+                if mesh is not None:
+                    filtered_mesh, filter_stats = _filter_mesh_components(
+                        mesh,
+                        min_component_faces=min_component_faces,
+                    )
+                    if filtered_mesh is None:
+                        print(
+                            "[infer_mesh]   mesh filtering removed all components "
+                            f"(components={filter_stats['num_components']}, "
+                            f"min_component_faces={min_component_faces})"
+                        )
+                        mesh = None
+                    else:
+                        mesh = filtered_mesh
+                        print(
+                            "[infer_mesh]   kept largest mesh shell "
+                            f"(components={filter_stats['num_components']}, "
+                            f"kept_faces={filter_stats['kept_faces']}, "
+                            f"dropped_small_components={filter_stats['dropped_small_components']}, "
+                            f"min_component_faces={min_component_faces})"
+                        )
                 if mesh is not None:
                     mesh_path = out_dir / f"{mol_id}_surface.obj"
                     export_mesh(mesh, mesh_path)
