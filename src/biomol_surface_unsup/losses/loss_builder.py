@@ -7,9 +7,10 @@ from biomol_surface_unsup.datasets.sampling import (
     QUERY_GROUP_GLOBAL,
     QUERY_GROUP_SURFACE_BAND,
 )
-from biomol_surface_unsup.losses.area import _safe_query_grads, area_loss
+from biomol_surface_unsup.losses.area import _safe_query_grads, area_loss, mean_curvature_integral
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.eikonal import eikonal_loss
+from biomol_surface_unsup.losses.electrostatics import electrostatic_free_energy_cfa
 from biomol_surface_unsup.losses.vdw import lj_body_integral
 from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
 from biomol_surface_unsup.losses.volume import volume_loss
@@ -24,7 +25,17 @@ QUERY_GROUP_IDS = {
     "surface_band": QUERY_GROUP_SURFACE_BAND,
 }
 
-SUPPORTED_LOSSES = ("containment", "weak_prior", "area", "pressure_volume", "lj_body", "volume", "eikonal")
+SUPPORTED_LOSSES = (
+    "containment",
+    "weak_prior",
+    "area",
+    "tolman_curvature",
+    "pressure_volume",
+    "lj_body",
+    "electrostatic",
+    "volume",
+    "eikonal",
+)
 
 
 def _batched_atomic_union_field(coords: torch.Tensor, radii: torch.Tensor, query_points: torch.Tensor) -> torch.Tensor:
@@ -54,6 +65,11 @@ def build_loss_fn(cfg: dict[str, object]):
     containment_margin = float(loss_cfg.get("containment_margin", 0.5))
     pressure = float(loss_cfg.get("pressure", 0.01))
     rho_0 = float(loss_cfg.get("rho_0", 0.0334))
+    gamma_0 = float(loss_cfg.get("gamma_0", loss_cfg.get("surface_tension", 0.1315)))
+    tolman_length = float(loss_cfg.get("tolman_length", loss_cfg.get("tau", 1.0)))
+    eps_solvent = float(loss_cfg.get("eps_solvent", 78.0))
+    eps_solute = float(loss_cfg.get("eps_solute", 1.0))
+    electrostatic_dist_eps = float(loss_cfg.get("electrostatic_dist_eps", 1.0))
 
     def loss_fn(
         batch: dict[str, torch.Tensor],
@@ -81,8 +97,11 @@ def build_loss_fn(cfg: dict[str, object]):
         """
         coords = batch["coords"]  # [B, N, 3]
         radii = batch["radii"]  # [B, N]
+        charges = batch.get("charges")
         epsilon = batch.get("epsilon")
         sigma = batch.get("sigma")
+        if charges is None:
+            charges = radii.new_zeros(radii.shape)
         if epsilon is None:
             epsilon = radii.new_zeros(radii.shape)
         if sigma is None:
@@ -91,6 +110,7 @@ def build_loss_fn(cfg: dict[str, object]):
         query_points = batch["query_points"]  # [B, Q, 3]
         query_group = batch["query_group"]  # [B, Q]
         query_mask = batch["query_mask"]  # [B, Q]
+        bbox_volume = batch.get("bbox_volume")
         pred_sdf = model_out["sdf"]  # [B, Q]
 
         if pred_sdf.ndim == 1:
@@ -101,9 +121,12 @@ def build_loss_fn(cfg: dict[str, object]):
             query_mask = query_mask.unsqueeze(0)
             coords = coords.unsqueeze(0)
             radii = radii.unsqueeze(0)
+            charges = charges.unsqueeze(0)
             epsilon = epsilon.unsqueeze(0)
             sigma = sigma.unsqueeze(0)
             atom_mask = atom_mask.unsqueeze(0)
+        if bbox_volume is not None:
+            bbox_volume = bbox_volume.reshape(-1)
         if not query_points.requires_grad:
             query_points = query_points.requires_grad_(True)
 
@@ -131,12 +154,15 @@ def build_loss_fn(cfg: dict[str, object]):
                 mask=loss_masks["area"],
                 eps=delta_eps,
                 query_grads=query_grads,
-            ),
+                domain_volume=bbox_volume,
+            ) * pred_sdf.new_tensor(gamma_0),
+            "tolman_curvature": pred_sdf.new_zeros(()),
             "pressure_volume": pressure_volume_loss(
                 pred_sdf,
                 mask=loss_masks["pressure_volume"],
                 pressure=pressure,
                 eps=heaviside_eps,
+                domain_volume=bbox_volume,
             ),
             "lj_body": lj_body_integral(
                 pred_sdf=pred_sdf,
@@ -148,6 +174,20 @@ def build_loss_fn(cfg: dict[str, object]):
                 mask=loss_masks["lj_body"],
                 rho_0=rho_0,
                 eps_h=heaviside_eps,
+                domain_volume=bbox_volume,
+            ),
+            "electrostatic": electrostatic_free_energy_cfa(
+                pred_sdf=pred_sdf,
+                query_points=query_points,
+                coords=coords,
+                charges=charges,
+                atom_mask=atom_mask,
+                mask=loss_masks["electrostatic"],
+                eps_solvent=eps_solvent,
+                eps_solute=eps_solute,
+                eps_h=heaviside_eps,
+                dist_eps=electrostatic_dist_eps,
+                domain_volume=bbox_volume,
             ),
             "volume": volume_loss(
                 pred_sdf,
@@ -175,6 +215,23 @@ def build_loss_fn(cfg: dict[str, object]):
                 mask=loss_masks["containment"],
             ),
         }
+        if bbox_volume is not None:
+            losses["tolman_curvature"] = mean_curvature_integral(
+                pred_sdf,
+                query_points,
+                mask=loss_masks["tolman_curvature"],
+                eps=delta_eps,
+                query_grads=query_grads,
+                domain_volume=bbox_volume,
+            )
+        losses["tolman_curvature"] = losses["tolman_curvature"] * pred_sdf.new_tensor(-2.0 * gamma_0 * tolman_length)
+        losses["vism_nonpolar"] = (
+            losses["pressure_volume"]
+            + losses["area"]
+            + losses["tolman_curvature"]
+            + losses["lj_body"]
+        )
+        losses["vism_total"] = losses["vism_nonpolar"] + losses["electrostatic"]
         safe_coords = coords.masked_fill(~atom_mask.unsqueeze(-1), 0.0)
         safe_radii = radii.masked_fill(~atom_mask, 0.0)
         with torch.no_grad():

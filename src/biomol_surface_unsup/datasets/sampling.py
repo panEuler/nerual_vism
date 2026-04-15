@@ -213,6 +213,9 @@ def sample_query_points(
         "query_points": query_points,
         "query_group": query_group,
         "containment_points": containment_points,
+        "bbox_lower": lower,
+        "bbox_upper": upper,
+        "bbox_volume": (upper - lower).prod(),
         "sampling_counts": {
             "global": int(num_global),
             "containment": int(num_containment),

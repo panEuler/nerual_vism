@@ -148,6 +148,21 @@ class Trainer:
             "cuda_max_reserved_gb": round(torch.cuda.max_memory_reserved() / (1024 ** 3), 3),
         }
 
+    @staticmethod
+    def _loss_debug_summary(metrics: dict[str, float]) -> dict[str, float]:
+        total = float(metrics.get("total", 0.0))
+        summary = {}
+        for name in ("vism_nonpolar", "electrostatic", "vism_total"):
+            if name in metrics:
+                value = float(metrics[name])
+                summary[name] = round(value, 6)
+                if abs(total) > 1e-12:
+                    summary[f"{name}_ratio"] = round(value / total, 6)
+        for name in ("area", "tolman_curvature", "pressure_volume", "lj_body"):
+            if name in metrics:
+                summary[name] = round(float(metrics[name]), 6)
+        return summary
+
     def train(self):
         num_epochs = int(self.cfg["train"].get("epochs", 1))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -196,9 +211,10 @@ class Trainer:
                 
                 if step % self.log_every == 0:
                     memory_summary = self._device_memory_summary()
+                    loss_summary = self._loss_debug_summary(metrics)
                     print(
                         f"epoch={epoch} step={step} batch={batch_summary} "
-                        f"memory={memory_summary} metrics={metrics}"
+                        f"memory={memory_summary} loss_summary={loss_summary} metrics={metrics}"
                     )
 
             if latest_metrics is not None:

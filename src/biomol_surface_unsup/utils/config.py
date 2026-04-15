@@ -6,9 +6,11 @@ import yaml
 DEFAULT_LOSS_GROUPS = {
     "containment": ["containment"],
     "weak_prior": ["surface_band"],
-    "area": ["surface_band"],
+    "area": ["global"],
+    "tolman_curvature": ["global"],
     "pressure_volume": ["global"],
     "lj_body": ["global"],
+    "electrostatic": ["global"],
     "volume": ["global"],
     "eikonal": ["global", "surface_band"],
 }
@@ -17,8 +19,10 @@ DEFAULT_LOSS_WEIGHTS = {
     "containment": 0.0,
     "weak_prior": 0.5,
     "area": 1.0,
+    "tolman_curvature": 0.0,
     "pressure_volume": 0.0,
     "lj_body": 0.0,
+    "electrostatic": 0.0,
     "volume": 0.0,
     "eikonal": 0.5,
 }
@@ -44,12 +48,15 @@ def normalize_loss_config(loss_cfg):
     configured_losses = normalized.get("losses", {}) or {}
     losses = {}
     for loss_name, default_groups in DEFAULT_LOSS_GROUPS.items():
-        legacy_weight_key = LEGACY_LOSS_WEIGHT_KEYS[loss_name]
+        legacy_weight_key = LEGACY_LOSS_WEIGHT_KEYS.get(loss_name)
         raw_entry = configured_losses.get(loss_name, {}) or {}
         groups = raw_entry.get("groups", default_groups)
         if isinstance(groups, str):
             groups = [groups]
-        weight = raw_entry.get("weight", normalized.get(legacy_weight_key, DEFAULT_LOSS_WEIGHTS[loss_name]))
+        fallback_weight = DEFAULT_LOSS_WEIGHTS[loss_name]
+        if legacy_weight_key is not None:
+            fallback_weight = normalized.get(legacy_weight_key, fallback_weight)
+        weight = raw_entry.get("weight", fallback_weight)
         losses[loss_name] = {
             "weight": float(weight),
             "groups": list(groups),

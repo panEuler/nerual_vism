@@ -270,5 +270,8 @@ class MoleculeDataset(Dataset):
             "query_points": sampling["query_points"],
             "query_group": sampling["query_group"],
             "containment_points": sampling["containment_points"],
+            "bbox_lower": sampling["bbox_lower"],
+            "bbox_upper": sampling["bbox_upper"],
+            "bbox_volume": sampling["bbox_volume"],
             "sampling_counts": sampling["sampling_counts"],
         }

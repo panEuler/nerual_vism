@@ -11,9 +11,14 @@ losses:
     weight: 0.5
     groups: [surface_band]
   area:
-    # Area regularization is evaluated on near-surface samples.
+    # Surface tension term is Monte-Carlo integrated on global samples.
     weight: 1.0
-    groups: [surface_band]
+    groups: [global]
+  tolman_curvature:
+    # Tolman curvature correction. Keep disabled by default until the
+    # higher-order geometry path is fully validated for the chosen model.
+    weight: 0.0
+    groups: [global]
   pressure_volume:
     # Pressure-volume stays very small in the baseline for stability.
     weight: 0.5
@@ -22,8 +27,9 @@ losses:
     # LJ body term is disabled in phase 1 and annealed in later.
     weight: 0.1
     groups: [global]
-  volume:
-    # Disable the old toy volume-fraction target in the baseline.
+  electrostatic:
+    # Coulomb-field approximation electrostatic free energy.
+    # Disabled in the lite baseline.
     weight: 0.0
     groups: [global]
   eikonal:
@@ -33,6 +39,11 @@ losses:
 
 pressure: 0.01
 rho_0: 0.0334
+gamma_0: 0.1315
+tolman_length: 1.0
+eps_solvent: 78.0
+eps_solute: 1.0
+electrostatic_dist_eps: 1.0
 target_volume_fraction: 0.5
 heaviside_eps: 0.1
 delta_eps: 0.1
@@ -47,15 +58,19 @@ anneal:
     containment: 2.0
     weak_prior: 1.0
     area: 0.0
+    tolman_curvature: 0.0
     pressure_volume: 0.0
     lj_body: 0.0
+    electrostatic: 0.0
     volume: 0.0
     eikonal: 0.5
   final_weights:
     containment: 2.0
     weak_prior: 0.0
     area: 1.0
+    tolman_curvature: 0.0
     pressure_volume: 0.5
     lj_body: 0.1
+    electrostatic: 0.0
     volume: 0.0
     eikonal: 0.5

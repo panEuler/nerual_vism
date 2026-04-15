@@ -57,6 +57,9 @@ def collate_fn(batch):
 
     containment_points = _pad_tensor_2d([sample["containment_points"] for sample in batch], max_containment)
     containment_mask = torch.zeros((len(batch), max_containment), dtype=torch.bool)
+    bbox_lower = torch.stack([sample["bbox_lower"] for sample in batch], dim=0)
+    bbox_upper = torch.stack([sample["bbox_upper"] for sample in batch], dim=0)
+    bbox_volume = torch.stack([sample["bbox_volume"] for sample in batch], dim=0)
 
     for idx, (num_atoms, num_queries, num_containment) in enumerate(zip(atom_counts, query_counts, containment_counts)):
         atom_mask[idx, :num_atoms] = True
@@ -83,5 +86,8 @@ def collate_fn(batch):
         "query_mask": query_mask,
         "containment_points": containment_points,
         "containment_mask": containment_mask,
+        "bbox_lower": bbox_lower,
+        "bbox_upper": bbox_upper,
+        "bbox_volume": bbox_volume,
         "sampling_counts": sampling_totals,
     }

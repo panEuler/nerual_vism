@@ -97,3 +97,34 @@ def chunked_lj_potential_sum(
 
     result = torch.cat(outputs, dim=1)
     return result.squeeze(0) if squeeze_batch else result
+
+
+def chunked_coulomb_field_squared_sum(
+    query_points: torch.Tensor,
+    coords: torch.Tensor,
+    charges: torch.Tensor,
+    atom_mask: torch.Tensor,
+    *,
+    chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
+    dist_eps: float = 1.0,
+) -> torch.Tensor:
+    """Compute |sum_i q_i (x-x_i) / |x-x_i|^3|^2 per query using query chunks."""
+    squeeze_batch = query_points.ndim == 2
+    if squeeze_batch:
+        query_points = query_points.unsqueeze(0)
+        coords = coords.unsqueeze(0)
+        charges = charges.unsqueeze(0)
+        atom_mask = atom_mask.unsqueeze(0)
+
+    outputs = []
+    for start, end in _chunk_bounds(query_points.shape[1], chunk_size):
+        query_chunk = query_points[:, start:end]
+        disp = query_chunk.unsqueeze(2) - coords.unsqueeze(1)
+        dists = disp.norm(dim=-1).clamp_min(float(dist_eps))
+        inv_r3 = dists.reciprocal().pow(3)
+        weighted = disp * (charges.unsqueeze(1) * atom_mask.unsqueeze(1).to(disp.dtype) * inv_r3).unsqueeze(-1)
+        field = weighted.sum(dim=2)
+        outputs.append(field.pow(2).sum(dim=-1))
+
+    result = torch.cat(outputs, dim=1)
+    return result.squeeze(0) if squeeze_batch else result
