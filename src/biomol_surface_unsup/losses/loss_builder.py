@@ -45,6 +45,19 @@ def _group_mask(query_group: torch.Tensor, query_mask: torch.Tensor, group_names
     return mask & query_mask
 
 
+def build_loss(name: str):
+    """Backward-compatible toy loss builder kept for older tests and scripts."""
+    if name != "weak_prior":
+        raise ValueError(f"unsupported legacy loss '{name}'")
+
+    def loss_fn(batch: dict[str, float], model_out: dict[str, list[float] | tuple[float, ...]]) -> float:
+        target = float(model_out["values"][0])
+        pred = float(batch["sdf"])
+        return abs(pred - target)
+
+    return loss_fn
+
+
 def build_loss_fn(cfg: dict[str, object]):
     loss_cfg = normalize_loss_config(dict(cfg.get("loss", {})))
     configured_losses = loss_cfg["losses"]

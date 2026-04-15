@@ -18,6 +18,13 @@ def _model_accepts_physics_inputs(model) -> bool:
     return {"charges", "epsilon", "sigma"}.issubset(names)
 
 
+def _model_accepts_return_aux(model) -> bool:
+    parameters = inspect.signature(model.forward).parameters.values()
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return True
+    return "return_aux" in {param.name for param in parameters}
+
+
 def train_step(
     model,
     batch,
@@ -57,7 +64,9 @@ def train_step(
             }
         )
 
-    out = model(coords, atom_types, radii, query_points, return_aux=False, **model_kwargs)
+    if _model_accepts_return_aux(model):
+        model_kwargs["return_aux"] = False
+    out = model(coords, atom_types, radii, query_points, **model_kwargs)
     losses = loss_fn(
         {
             "coords": coords,
