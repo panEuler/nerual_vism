@@ -7,14 +7,14 @@ from biomol_surface_unsup.datasets.sampling import (
     QUERY_GROUP_GLOBAL,
     QUERY_GROUP_SURFACE_BAND,
 )
-from biomol_surface_unsup.losses.area import _safe_query_grads, area_loss, mean_curvature_integral
+from biomol_surface_unsup.losses.area import _safe_query_grads, area_loss, mean_curvature_integral_fd
 from biomol_surface_unsup.losses.containment import containment_loss
 from biomol_surface_unsup.losses.eikonal import eikonal_loss
 from biomol_surface_unsup.losses.electrostatics import electrostatic_free_energy_cfa
 from biomol_surface_unsup.losses.vdw import lj_body_integral
 from biomol_surface_unsup.losses.pressure_volume import pressure_volume_loss
-from biomol_surface_unsup.losses.volume import volume_loss
 from biomol_surface_unsup.losses.weak_prior import weak_prior_loss
+from biomol_surface_unsup.legacy.losses import build_loss as _legacy_build_loss
 from biomol_surface_unsup.utils.pairwise import chunked_smooth_atomic_union_field
 from biomol_surface_unsup.utils.config import normalize_loss_config
 
@@ -33,8 +33,15 @@ SUPPORTED_LOSSES = (
     "pressure_volume",
     "lj_body",
     "electrostatic",
-    "volume",
     "eikonal",
+)
+
+VISM_COMPONENT_LOSSES = (
+    "area",
+    "tolman_curvature",
+    "pressure_volume",
+    "lj_body",
+    "electrostatic",
 )
 
 
@@ -56,10 +63,46 @@ def _group_mask(query_group: torch.Tensor, query_mask: torch.Tensor, group_names
     return mask & query_mask
 
 
+def _domain_volume_from_batch(batch: dict[str, torch.Tensor], reference: torch.Tensor) -> torch.Tensor | None:
+    bbox_volume = batch.get("bbox_volume")
+    if bbox_volume is not None:
+        return torch.as_tensor(bbox_volume, dtype=reference.dtype, device=reference.device).reshape(-1)
+
+    bbox_lower = batch.get("bbox_lower")
+    bbox_upper = batch.get("bbox_upper")
+    if bbox_lower is None or bbox_upper is None:
+        return None
+
+    lower = torch.as_tensor(bbox_lower, dtype=reference.dtype, device=reference.device)
+    upper = torch.as_tensor(bbox_upper, dtype=reference.dtype, device=reference.device)
+    return (upper - lower).prod(dim=-1).reshape(-1)
+
+
+def _normalize_vism_objective(loss_cfg: dict[str, object]) -> str:
+    objective = str(loss_cfg.get("vism_objective", "energy")).lower()
+    normalization = loss_cfg.get("vism_normalization")
+    if normalization is not None:
+        normalization_name = str(normalization).lower()
+        if normalization_name in {"bbox_volume", "volume", "energy_density", "density"}:
+            objective = "energy_density"
+        elif normalization_name in {"none", "energy"}:
+            objective = "energy"
+        else:
+            raise ValueError(
+                "unsupported vism_normalization, expected one of: none, energy, bbox_volume, volume, density"
+            )
+
+    if objective in {"energy", "free_energy", "total_energy"}:
+        return "energy"
+    if objective in {"energy_density", "density", "bbox_volume", "volume_normalized"}:
+        return "energy_density"
+    raise ValueError("unsupported vism_objective, expected 'energy' or 'energy_density'")
+
+
 def build_loss_fn(cfg: dict[str, object]):
     loss_cfg = normalize_loss_config(dict(cfg.get("loss", {})))
     configured_losses = loss_cfg["losses"]
-    target_volume_fraction = float(loss_cfg.get("target_volume_fraction", 0.5))
+    vism_objective = _normalize_vism_objective(loss_cfg)
     delta_eps = float(loss_cfg.get("delta_eps", 0.1))
     heaviside_eps = float(loss_cfg.get("heaviside_eps", 0.1))
     containment_margin = float(loss_cfg.get("containment_margin", 0.5))
@@ -67,9 +110,15 @@ def build_loss_fn(cfg: dict[str, object]):
     rho_0 = float(loss_cfg.get("rho_0", 0.0334))
     gamma_0 = float(loss_cfg.get("gamma_0", loss_cfg.get("surface_tension", 0.1315)))
     tolman_length = float(loss_cfg.get("tolman_length", loss_cfg.get("tau", 1.0)))
+    tolman_fd_offset = float(loss_cfg.get("tolman_fd_offset", delta_eps))
     eps_solvent = float(loss_cfg.get("eps_solvent", 78.0))
     eps_solute = float(loss_cfg.get("eps_solute", 1.0))
     electrostatic_dist_eps = float(loss_cfg.get("electrostatic_dist_eps", 1.0))
+
+    def effective_weight(loss_name: str, loss_weights: dict[str, float] | None) -> float:
+        if loss_weights is not None and loss_name in loss_weights:
+            return float(loss_weights[loss_name])
+        return float(configured_losses[loss_name]["weight"])
 
     def loss_fn(
         batch: dict[str, torch.Tensor],
@@ -110,7 +159,6 @@ def build_loss_fn(cfg: dict[str, object]):
         query_points = batch["query_points"]  # [B, Q, 3]
         query_group = batch["query_group"]  # [B, Q]
         query_mask = batch["query_mask"]  # [B, Q]
-        bbox_volume = batch.get("bbox_volume")
         pred_sdf = model_out["sdf"]  # [B, Q]
 
         if pred_sdf.ndim == 1:
@@ -125,8 +173,9 @@ def build_loss_fn(cfg: dict[str, object]):
             epsilon = epsilon.unsqueeze(0)
             sigma = sigma.unsqueeze(0)
             atom_mask = atom_mask.unsqueeze(0)
-        if bbox_volume is not None:
-            bbox_volume = bbox_volume.reshape(-1)
+        bbox_volume = _domain_volume_from_batch(batch, pred_sdf)
+        if bbox_volume is not None and bbox_volume.numel() == 1 and pred_sdf.shape[0] > 1:
+            bbox_volume = bbox_volume.expand(pred_sdf.shape[0])
         if not query_points.requires_grad:
             query_points = query_points.requires_grad_(True)
 
@@ -145,26 +194,66 @@ def build_loss_fn(cfg: dict[str, object]):
             loss_name: _group_mask(query_group, query_mask, active_groups[loss_name])
             for loss_name in SUPPORTED_LOSSES
         }
+        if bbox_volume is None and vism_objective == "energy_density":
+            raise ValueError(
+                "vism_objective='energy_density' requires bbox_volume. "
+                "Use biomol_surface_unsup.datasets.collate.collate_fn, or pass bbox_volume/bbox_lower/bbox_upper "
+                "through the training batch."
+            )
+        if (
+            bbox_volume is None
+            and effective_weight("tolman_curvature", loss_weights) != 0.0
+            and torch.any(loss_masks["tolman_curvature"])
+        ):
+            raise ValueError(
+                "tolman_curvature requires bbox_volume for physical Monte Carlo normalization. "
+                "Use biomol_surface_unsup.datasets.collate.collate_fn, or pass bbox_volume/bbox_lower/bbox_upper "
+                "through the training batch."
+            )
 
         query_grads = _safe_query_grads(pred_sdf, query_points)
-        losses = {
-            "area": area_loss(
+        batch_size = pred_sdf.shape[0]
+        component_weights = {
+            loss_name: effective_weight(loss_name, loss_weights)
+            for loss_name in VISM_COMPONENT_LOSSES
+        }
+        zero_per_sample = pred_sdf.new_zeros((batch_size,))
+        area_energy = zero_per_sample
+        if component_weights["area"] != 0.0:
+            area_energy = area_loss(
                 pred_sdf,
                 query_points,
                 mask=loss_masks["area"],
                 eps=delta_eps,
                 query_grads=query_grads,
                 domain_volume=bbox_volume,
-            ) * pred_sdf.new_tensor(gamma_0),
-            "tolman_curvature": pred_sdf.new_zeros(()),
-            "pressure_volume": pressure_volume_loss(
+                reduction="none",
+            ) * pred_sdf.new_tensor(gamma_0)
+        tolman_energy = pred_sdf.new_zeros((batch_size,))
+        if bbox_volume is not None and component_weights["tolman_curvature"] != 0.0:
+            tolman_energy = mean_curvature_integral_fd(
+                pred_sdf,
+                query_points,
+                mask=loss_masks["tolman_curvature"],
+                eps=delta_eps,
+                offset=tolman_fd_offset,
+                query_grads=query_grads,
+                domain_volume=bbox_volume,
+                reduction="none",
+            ) * pred_sdf.new_tensor(-2.0 * gamma_0 * tolman_length)
+        pressure_energy = zero_per_sample
+        if component_weights["pressure_volume"] != 0.0:
+            pressure_energy = pressure_volume_loss(
                 pred_sdf,
                 mask=loss_masks["pressure_volume"],
                 pressure=pressure,
                 eps=heaviside_eps,
                 domain_volume=bbox_volume,
-            ),
-            "lj_body": lj_body_integral(
+                reduction="none",
+            )
+        lj_energy = zero_per_sample
+        if component_weights["lj_body"] != 0.0:
+            lj_energy = lj_body_integral(
                 pred_sdf=pred_sdf,
                 query_points=query_points,
                 coords=coords,
@@ -175,8 +264,11 @@ def build_loss_fn(cfg: dict[str, object]):
                 rho_0=rho_0,
                 eps_h=heaviside_eps,
                 domain_volume=bbox_volume,
-            ),
-            "electrostatic": electrostatic_free_energy_cfa(
+                reduction="none",
+            )
+        electrostatic_energy = zero_per_sample
+        if component_weights["electrostatic"] != 0.0:
+            electrostatic_energy = electrostatic_free_energy_cfa(
                 pred_sdf=pred_sdf,
                 query_points=query_points,
                 coords=coords,
@@ -188,13 +280,26 @@ def build_loss_fn(cfg: dict[str, object]):
                 eps_h=heaviside_eps,
                 dist_eps=electrostatic_dist_eps,
                 domain_volume=bbox_volume,
-            ),
-            "volume": volume_loss(
-                pred_sdf,
-                mask=loss_masks["volume"],
-                target_volume_fraction=target_volume_fraction,
-                eps=heaviside_eps,
-            ),
+                reduction="none",
+            )
+        component_energy = {
+            "area": area_energy,
+            "tolman_curvature": tolman_energy,
+            "pressure_volume": pressure_energy,
+            "lj_body": lj_energy,
+            "electrostatic": electrostatic_energy,
+        }
+        if bbox_volume is None:
+            component_density = component_energy
+        else:
+            safe_volume = bbox_volume.to(dtype=pred_sdf.dtype, device=pred_sdf.device).clamp_min(1e-12)
+            component_density = {
+                name: value / safe_volume
+                for name, value in component_energy.items()
+            }
+        selected_components = component_density if vism_objective == "energy_density" else component_energy
+
+        losses = {
             "weak_prior": weak_prior_loss(
                 coords,
                 radii,
@@ -215,23 +320,32 @@ def build_loss_fn(cfg: dict[str, object]):
                 mask=loss_masks["containment"],
             ),
         }
+        for loss_name in VISM_COMPONENT_LOSSES:
+            losses[loss_name] = selected_components[loss_name].mean()
+            losses[f"{loss_name}_energy"] = component_energy[loss_name].mean()
+            if bbox_volume is not None:
+                losses[f"{loss_name}_density"] = component_density[loss_name].mean()
+
+        vism_nonpolar_energy = area_energy + tolman_energy + pressure_energy + lj_energy
+        vism_total_energy = vism_nonpolar_energy + electrostatic_energy
+        if bbox_volume is None:
+            vism_nonpolar_density = vism_nonpolar_energy
+            vism_total_density = vism_total_energy
+        else:
+            vism_nonpolar_density = vism_nonpolar_energy / safe_volume
+            vism_total_density = vism_total_energy / safe_volume
+        selected_nonpolar = vism_nonpolar_density if vism_objective == "energy_density" else vism_nonpolar_energy
+        selected_total = vism_total_density if vism_objective == "energy_density" else vism_total_energy
+        losses["vism_nonpolar"] = selected_nonpolar.mean()
+        losses["vism_total"] = selected_total.mean()
+        losses["vism_nonpolar_energy"] = vism_nonpolar_energy.mean()
+        losses["vism_total_energy"] = vism_total_energy.mean()
+        losses["vism_energy"] = losses["vism_total_energy"]
         if bbox_volume is not None:
-            losses["tolman_curvature"] = mean_curvature_integral(
-                pred_sdf,
-                query_points,
-                mask=loss_masks["tolman_curvature"],
-                eps=delta_eps,
-                query_grads=query_grads,
-                domain_volume=bbox_volume,
-            )
-        losses["tolman_curvature"] = losses["tolman_curvature"] * pred_sdf.new_tensor(-2.0 * gamma_0 * tolman_length)
-        losses["vism_nonpolar"] = (
-            losses["pressure_volume"]
-            + losses["area"]
-            + losses["tolman_curvature"]
-            + losses["lj_body"]
-        )
-        losses["vism_total"] = losses["vism_nonpolar"] + losses["electrostatic"]
+            losses["vism_nonpolar_density"] = vism_nonpolar_density.mean()
+            losses["vism_total_density"] = vism_total_density.mean()
+            losses["vism_density"] = losses["vism_total_density"]
+        losses["vism_objective"] = losses["vism_total"]
         safe_coords = coords.masked_fill(~atom_mask.unsqueeze(-1), 0.0)
         safe_radii = radii.masked_fill(~atom_mask, 0.0)
         with torch.no_grad():
@@ -245,11 +359,14 @@ def build_loss_fn(cfg: dict[str, object]):
 
         total = pred_sdf.new_zeros(())
         for loss_name in SUPPORTED_LOSSES:
-            weight = float(configured_losses[loss_name]["weight"])
-            if loss_weights is not None and loss_name in loss_weights:
-                weight = float(loss_weights[loss_name])
+            weight = effective_weight(loss_name, loss_weights)
             total = total + weight * losses[loss_name]
         losses["total"] = total
         return losses
 
     return loss_fn
+
+
+def build_loss(name: str):
+    """Compatibility shim forwarding the old helper into the legacy module."""
+    return _legacy_build_loss(name)

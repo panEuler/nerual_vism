@@ -6,12 +6,11 @@ import yaml
 DEFAULT_LOSS_GROUPS = {
     "containment": ["containment"],
     "weak_prior": ["surface_band"],
-    "area": ["global"],
+    "area": ["surface_band"],
     "tolman_curvature": ["global"],
     "pressure_volume": ["global"],
     "lj_body": ["global"],
     "electrostatic": ["global"],
-    "volume": ["global"],
     "eikonal": ["global", "surface_band"],
 }
 
@@ -23,7 +22,6 @@ DEFAULT_LOSS_WEIGHTS = {
     "pressure_volume": 0.0,
     "lj_body": 0.0,
     "electrostatic": 0.0,
-    "volume": 0.0,
     "eikonal": 0.5,
 }
 
@@ -33,7 +31,6 @@ LEGACY_LOSS_WEIGHT_KEYS = {
     "area": "lambda_area",
     "pressure_volume": "lambda_volume",
     "lj_body": "lambda_lj",
-    "volume": "lambda_volume",
     "eikonal": "lambda_eikonal",
 }
 

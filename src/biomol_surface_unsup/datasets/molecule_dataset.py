@@ -140,7 +140,11 @@ class MoleculeDataset(Dataset):
         split_file = self.root / f"{self.split}.txt"
         if split_file.exists():
             sample_ids = [line.strip() for line in split_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-            sample_dirs = [self.root / sample_id for sample_id in sample_ids]
+            if self.root.name == "processed":
+                split_root = self.root.parent / self.split
+                sample_dirs = [split_root / sample_id for sample_id in sample_ids]
+            else:
+                sample_dirs = [self.root / sample_id for sample_id in sample_ids]
         elif any(self.root.glob("*_coords.npy")):
             sample_dirs = [self.root]
         else:

@@ -47,7 +47,7 @@ class Trainer:
             split=data_cfg.get("train_split", "train"),
             num_samples=dataset_num_samples,
             num_query_points=int(data_cfg.get("num_query_points", 32)),
-            bbox_padding=float(data_cfg.get("bbox_padding", 2.0)), # bbox_paddiing 不清楚
+            bbox_padding=float(data_cfg.get("bbox_padding", 2.0)), # bbox_paddiing 
             containment_jitter=float(data_cfg.get("containment_jitter", 0.15)), # 包裹损失
             surface_band_width=float(
                 data_cfg.get("surface_band_width", data_cfg.get("surface_band_width", 0.25))
@@ -159,6 +159,9 @@ class Trainer:
                 if abs(total) > 1e-12:
                     summary[f"{name}_ratio"] = round(value / total, 6)
         for name in ("area", "tolman_curvature", "pressure_volume", "lj_body"):
+            if name in metrics:
+                summary[name] = round(float(metrics[name]), 6)
+        for name in ("vism_total_energy", "vism_total_density"):
             if name in metrics:
                 summary[name] = round(float(metrics[name]), 6)
         return summary

@@ -7,7 +7,7 @@ model:
   config: configs/model/local_global.yaml
 
 loss:
-  config: configs/loss/vism_lite.yaml
+  config: configs/loss/vism_physical.yaml
 
 train:
   config: configs/train/debug.yaml

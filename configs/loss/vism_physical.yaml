@@ -1,6 +1,8 @@
 # Closer-to-paper nonpolar VISM objective:
 #   L = lambda_wp * L_wp + lambda_eik * L_eik
 #       + (ΔP * V + γ0 * A - 2γ0τ * C + ρw * W)
+# Training uses the per-sample VISM energy density G_i / bbox_volume_i.
+vism_objective: energy_density
 losses:
   containment:
     weight: 0.0
@@ -23,9 +25,7 @@ losses:
   electrostatic:
     weight: 1.0
     groups: [global]
-  volume:
-    weight: 0.0
-    groups: [global]
+
   eikonal:
     weight: 0.1
     groups: [global, surface_band]
@@ -34,6 +34,7 @@ pressure: 0.0
 rho_0: 0.0331
 gamma_0: 0.1315
 tolman_length: 1.0
+tolman_fd_offset: 0.1
 eps_solvent: 78.0
 eps_solute: 1.0
 electrostatic_dist_eps: 1.0
@@ -54,7 +55,6 @@ anneal:
     pressure_volume: 1.0
     lj_body: 1.0
     electrostatic: 1.0
-    volume: 0.0
     eikonal: 0.1
   final_weights:
     containment: 0.0
@@ -64,5 +64,4 @@ anneal:
     pressure_volume: 1.0
     lj_body: 1.0
     electrostatic: 1.0
-    volume: 0.0
     eikonal: 0.1

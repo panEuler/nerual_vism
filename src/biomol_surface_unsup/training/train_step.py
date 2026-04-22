@@ -18,6 +18,20 @@ def _model_accepts_physics_inputs(model) -> bool:
     return {"charges", "epsilon", "sigma"}.issubset(names)
 
 
+def _model_accepts_return_aux(model) -> bool:
+    parameters = inspect.signature(model.forward).parameters.values()
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return True
+    return "return_aux" in {param.name for param in parameters}
+
+
+def _optional_tensor_to_device(batch, key, device):
+    value = batch.get(key)
+    if value is None:
+        return None
+    return value.to(device)
+
+
 def train_step(
     model,
     batch,
@@ -43,6 +57,9 @@ def train_step(
     query_mask = batch["query_mask"].to(device)  # [B, Q]
     containment_points = batch["containment_points"].to(device)  # [B, C, 3]
     containment_mask = batch["containment_mask"].to(device)  # [B, C]
+    bbox_lower = _optional_tensor_to_device(batch, "bbox_lower", device)
+    bbox_upper = _optional_tensor_to_device(batch, "bbox_upper", device)
+    bbox_volume = _optional_tensor_to_device(batch, "bbox_volume", device)
 
     model_kwargs = {
         "atom_mask": atom_mask,
@@ -57,7 +74,10 @@ def train_step(
             }
         )
 
-    out = model(coords, atom_types, radii, query_points, return_aux=False, **model_kwargs)
+    if _model_accepts_return_aux(model):
+        model_kwargs["return_aux"] = False
+
+    out = model(coords, atom_types, radii, query_points, **model_kwargs)
     losses = loss_fn(
         {
             "coords": coords,
@@ -73,6 +93,9 @@ def train_step(
             "query_mask": query_mask,
             "containment_points": containment_points,
             "containment_mask": containment_mask,
+            "bbox_lower": bbox_lower,
+            "bbox_upper": bbox_upper,
+            "bbox_volume": bbox_volume,
         },
         out,
         loss_weights=loss_weights,

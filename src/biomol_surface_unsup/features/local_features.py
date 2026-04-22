@@ -49,9 +49,13 @@ class LocalFeatureBuilder(nn.Module):
         coords: torch.Tensor,
         eps: float = 1e-12,
     ) -> torch.Tensor:
-        # `torch.cdist` avoids materializing the much larger [B, Q, N, 3]
-        # broadcasted difference tensor, which can otherwise spike memory on
-        # large proteins and get the training process killed by the OS.
+        # `torch.cdist` is memory efficient, but its higher-order backward is not
+        # implemented in some PyTorch builds. Area/eikonal losses require those
+        # higher-order gradients through query points during training, so fall
+        # back to the explicit broadcast form in that case.
+        if torch.is_grad_enabled() and query_points.requires_grad:
+            diffs = query_points.unsqueeze(2) - coords.unsqueeze(1)
+            return torch.sqrt(diffs.pow(2).sum(dim=-1) + float(eps))
         return torch.cdist(query_points, coords).clamp_min(float(eps))
 
     def forward(

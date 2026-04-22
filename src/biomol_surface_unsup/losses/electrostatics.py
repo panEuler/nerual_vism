@@ -7,7 +7,7 @@ import torch
 from biomol_surface_unsup.utils.pairwise import chunked_coulomb_field_squared_sum
 
 from .area import _masked_monte_carlo_integral
-from .volume import smooth_heaviside
+from .heaviside import smooth_heaviside
 
 
 COULOMB_CONSTANT_KJ_MOL_ANGSTROM_E2 = 1389.35457644382
@@ -26,6 +26,7 @@ def electrostatic_free_energy_cfa(
     eps_h: float = 0.1,
     dist_eps: float = 1.0,
     domain_volume: torch.Tensor | None = None,
+    reduction: str = "mean",
 ) -> torch.Tensor:
     """Coulomb-field approximation to VISM electrostatic free energy.
 
@@ -42,7 +43,11 @@ def electrostatic_free_energy_cfa(
         atom_mask = atom_mask.unsqueeze(0)
         mask = None if mask is None else mask.unsqueeze(0)
 
+    if reduction not in {"mean", "none"}:
+        raise ValueError("reduction must be either 'mean' or 'none'")
     if abs(float(eps_solvent) - float(eps_solute)) < 1e-12:
+        if reduction == "none":
+            return pred_sdf.new_zeros((pred_sdf.shape[0],))
         return pred_sdf.new_zeros(())
 
     with torch.no_grad():
@@ -56,14 +61,28 @@ def electrostatic_free_energy_cfa(
 
     exterior = smooth_heaviside(pred_sdf, eps_h)
     integrand = field_sq * exterior
+
     if domain_volume is None:
-        if mask is not None:
-            if not torch.any(mask):
-                return pred_sdf.new_zeros(())
-            integrand = integrand[mask]
-        integral = integrand.mean()
+        if reduction == "none":
+            integral = _masked_monte_carlo_integral(
+                integrand,
+                domain_volume=None,
+                mask=mask,
+                reduction=reduction,
+            )
+        else:
+            if mask is not None:
+                if not torch.any(mask):
+                    return pred_sdf.new_zeros(())
+                integrand = integrand[mask]
+            integral = integrand.mean()
     else:
-        integral = _masked_monte_carlo_integral(integrand, domain_volume=domain_volume, mask=mask)
+        integral = _masked_monte_carlo_integral(
+            integrand,
+            domain_volume=domain_volume,
+            mask=mask,
+            reduction=reduction,
+        )
 
     coefficient = (
         COULOMB_CONSTANT_KJ_MOL_ANGSTROM_E2

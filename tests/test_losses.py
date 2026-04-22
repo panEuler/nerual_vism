@@ -94,7 +94,6 @@ def test_normalize_loss_config_preserves_default_behavior() -> None:
     assert normalized["losses"]["area"] == {"weight": 1.0, "groups": ["surface_band"]}
     assert normalized["losses"]["pressure_volume"] == {"weight": 0.5, "groups": ["global"]}
     assert normalized["losses"]["lj_body"] == {"weight": 0.0, "groups": ["global"]}
-    assert normalized["losses"]["volume"] == {"weight": 0.5, "groups": ["global"]}
     assert normalized["losses"]["eikonal"] == {"weight": 0.5, "groups": ["global", "surface_band"]}
 
 
@@ -188,7 +187,6 @@ def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:
                     "area": {"weight": 1.0, "groups": ["surface_band"]},
                     "pressure_volume": {"weight": 0.5, "groups": ["global"]},
                     "lj_body": {"weight": 0.25, "groups": ["global"]},
-                    "volume": {"weight": 0.0, "groups": ["global"]},
                     "eikonal": {"weight": 0.5, "groups": ["global", "surface_band"]},
                 },
                 "containment_margin": 0.5,
@@ -197,7 +195,9 @@ def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:
     )
 
     losses = loss_fn(batch, {"sdf": pred_sdf})
-    assert {"area", "pressure_volume", "lj_body", "volume", "containment", "weak_prior", "eikonal", "total"}.issubset(losses)
+    assert {"area", "pressure_volume", "lj_body", "containment", "weak_prior", "eikonal", "total"}.issubset(losses)
+    assert "volume" not in losses
+    assert "volume_count" not in losses
     assert losses["containment_count"].item() == 2.0
     assert losses["global_count"].item() == 2.0
     assert losses["surface_band_count"].item() == 2.0
@@ -205,7 +205,6 @@ def test_build_loss_fn_returns_weighted_losses_from_default_mapping() -> None:
     assert losses["area_count"].item() == 2.0
     assert losses["pressure_volume_count"].item() == 2.0
     assert losses["lj_body_count"].item() == 2.0
-    assert losses["volume_count"].item() == 2.0
     assert losses["eikonal_count"].item() == 4.0
     assert losses["containment"].ndim == 0
     assert losses["total"].ndim == 0
@@ -223,7 +222,6 @@ def test_build_loss_fn_supports_multi_group_union_masks() -> None:
                     "area": {"weight": 1.0, "groups": ["surface_band"]},
                     "pressure_volume": {"weight": 1.0, "groups": ["global"]},
                     "lj_body": {"weight": 1.0, "groups": ["global"]},
-                    "volume": {"weight": 0.0, "groups": ["global"]},
                     "eikonal": {"weight": 1.0, "groups": ["global", "surface_band"]},
                 }
             }
@@ -256,7 +254,6 @@ def test_build_loss_fn_handles_empty_masks_from_configured_groups() -> None:
                     "area": {"weight": 1.0, "groups": ["surface_band"]},
                     "pressure_volume": {"weight": 1.0, "groups": []},
                     "lj_body": {"weight": 1.0, "groups": []},
-                    "volume": {"weight": 1.0, "groups": ["global"]},
                     "eikonal": {"weight": 1.0, "groups": []},
                 }
             }
@@ -276,7 +273,59 @@ def test_build_loss_fn_handles_empty_masks_from_configured_groups() -> None:
     assert losses["pressure_volume_count"].item() == pytest.approx(0.0)
     assert losses["lj_body"].item() == pytest.approx(0.0)
     assert losses["lj_body_count"].item() == pytest.approx(0.0)
-    assert losses["volume_count"].item() == pytest.approx(4.0)
+    assert "volume_count" not in losses
+
+
+def test_energy_density_objective_normalizes_vism_terms_per_sample() -> None:
+    batch, pred_sdf = _build_batch()
+    batch["bbox_volume"] = torch.tensor([10.0, 100.0], dtype=torch.float32)
+    loss_fn = build_loss_fn(
+        {
+            "loss": {
+                "vism_objective": "energy_density",
+                "losses": {
+                    "containment": {"weight": 0.0, "groups": ["containment"]},
+                    "weak_prior": {"weight": 0.0, "groups": ["surface_band"]},
+                    "area": {"weight": 0.0, "groups": ["global"]},
+                    "tolman_curvature": {"weight": 0.0, "groups": ["global"]},
+                    "pressure_volume": {"weight": 0.0, "groups": ["global"]},
+                    "lj_body": {"weight": 1.0, "groups": ["global"]},
+                    "electrostatic": {"weight": 0.0, "groups": ["global"]},
+                    "eikonal": {"weight": 0.0, "groups": ["global", "surface_band"]},
+                },
+            }
+        }
+    )
+
+    losses = loss_fn(batch, {"sdf": pred_sdf})
+    global_mask = (batch["query_group"] == QUERY_GROUP_GLOBAL) & batch["query_mask"]
+    per_sample_lj_energy = lj_body_integral(
+        pred_sdf,
+        batch["query_points"],
+        batch["coords"],
+        batch["epsilon"],
+        batch["sigma"],
+        batch["atom_mask"],
+        mask=global_mask,
+        rho_0=0.0334,
+        eps_h=0.1,
+        domain_volume=batch["bbox_volume"],
+        reduction="none",
+    )
+    expected_density = (per_sample_lj_energy / batch["bbox_volume"]).mean()
+
+    assert losses["lj_body"].item() == pytest.approx(expected_density.item(), rel=1e-5)
+    assert losses["lj_body_energy"].item() == pytest.approx(per_sample_lj_energy.mean().item(), rel=1e-5)
+    assert losses["lj_body_density"].item() == pytest.approx(expected_density.item(), rel=1e-5)
+    assert losses["total"].item() == pytest.approx(expected_density.item(), rel=1e-5)
+
+
+def test_energy_density_objective_requires_bbox_volume() -> None:
+    batch, pred_sdf = _build_batch()
+    loss_fn = build_loss_fn({"loss": {"vism_objective": "energy_density"}})
+
+    with pytest.raises(ValueError, match="energy_density"):
+        loss_fn(batch, {"sdf": pred_sdf})
 
 
 def test_train_step_runs_backward_and_optimizer_step_on_batched_toy_batch() -> None:
@@ -304,7 +353,7 @@ def test_train_step_runs_backward_and_optimizer_step_on_batched_toy_batch() -> N
 
     assert "total" in metrics
     assert metrics["total"] >= 0.0
-    assert metrics["volume_count"] == pytest.approx(2.0)
+    assert "volume_count" not in metrics
     assert metrics["containment_count"] == pytest.approx(2.0)
     assert not torch.allclose(before, after)
 

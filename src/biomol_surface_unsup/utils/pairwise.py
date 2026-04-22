@@ -59,8 +59,8 @@ def chunked_smooth_atomic_union_field(
     scale = float(temperature)
     for start, end in _chunk_bounds(query_points.shape[1], chunk_size):
         query_chunk = query_points[:, start:end]
-        pairwise = torch.cdist(query_chunk, coords) - radii.unsqueeze(-2)
-        outputs.append(-torch.logsumexp(-scale * pairwise, dim=-1) / scale)
+        pairwise = torch.cdist(query_chunk, coords) - radii.unsqueeze(-2) # [B, chunk_size, N]
+        outputs.append(-torch.logsumexp(-scale * pairwise, dim=-1) / scale) # list -torch.logsumexp(-scale * pairwise, dim=-1:[B, chunk_size]
 
     result = torch.cat(outputs, dim=1)
     return result.squeeze(0) if squeeze_batch else result

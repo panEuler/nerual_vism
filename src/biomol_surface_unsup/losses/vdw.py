@@ -5,7 +5,7 @@ import torch
 from biomol_surface_unsup.utils.pairwise import chunked_lj_potential_sum
 
 from .area import _masked_monte_carlo_integral
-from .volume import smooth_heaviside
+from .heaviside import smooth_heaviside
 
 
 def lj_body_integral(
@@ -21,6 +21,7 @@ def lj_body_integral(
     dist_eps: float = 1.5,
     potential_clip: float = 100.0,
     domain_volume: torch.Tensor | None = None,
+    reduction: str = "mean",
 ) -> torch.Tensor:
     """Compute the Lennard-Jones (LJ) body integral over the exterior solvent region.
 
@@ -63,13 +64,24 @@ def lj_body_integral(
     # 6. Only integrate the L-J potential over the valid exterior solvent region.
     integrand = lj_energy * exterior
     
-    # 7. Discard padded dummy space queries safely.
     if domain_volume is None:
+        if reduction == "none":
+            return pred_sdf.new_tensor(float(rho_0)) * _masked_monte_carlo_integral(
+                integrand,
+                domain_volume=None,
+                mask=mask,
+                reduction=reduction,
+            )
         if mask is not None:
             if not torch.any(mask):
                 return pred_sdf.new_zeros(())
             integrand = integrand[mask]
         return pred_sdf.new_tensor(float(rho_0)) * integrand.mean()
 
-    integral = _masked_monte_carlo_integral(integrand, domain_volume=domain_volume, mask=mask)
+    integral = _masked_monte_carlo_integral(
+        integrand,
+        domain_volume=domain_volume,
+        mask=mask,
+        reduction=reduction,
+    )
     return pred_sdf.new_tensor(float(rho_0)) * integral

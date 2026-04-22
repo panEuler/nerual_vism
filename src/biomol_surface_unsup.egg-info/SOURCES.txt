@@ -26,10 +26,9 @@ src/biomol_surface_unsup/losses/__init__.py
 src/biomol_surface_unsup/losses/area.py
 src/biomol_surface_unsup/losses/containment.py
 src/biomol_surface_unsup/losses/eikonal.py
+src/biomol_surface_unsup/losses/heaviside.py
 src/biomol_surface_unsup/losses/loss_builder.py
 src/biomol_surface_unsup/losses/pressure_volume.py
-src/biomol_surface_unsup/losses/vism_lite.py
-src/biomol_surface_unsup/losses/volume.py
 src/biomol_surface_unsup/losses/weak_prior.py
 src/biomol_surface_unsup/models/__init__.py
 src/biomol_surface_unsup/models/fusion.py

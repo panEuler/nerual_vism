@@ -58,6 +58,9 @@ def main() -> int:
             "query_mask": batch["query_mask"],
             "containment_points": batch["containment_points"],
             "containment_mask": batch["containment_mask"],
+            "bbox_lower": batch["bbox_lower"],
+            "bbox_upper": batch["bbox_upper"],
+            "bbox_volume": batch["bbox_volume"],
         },
         output,
     )
